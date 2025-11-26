@@ -1,5 +1,4 @@
-from utils.mnist import *
-import os
+from utils.mnist import extract_training, display_image
 
 
 res = extract_training()
