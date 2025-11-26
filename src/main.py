@@ -1,6 +1,4 @@
 from utils.mnist import *
-import os
-
 
 res = extract_training()
 images, labels, mndata = res
