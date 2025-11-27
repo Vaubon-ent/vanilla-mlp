@@ -112,54 +112,68 @@ class NeuralNetwork:
             res += cost
         return res/size_costs
 
-    def training(self):
+    def training(self, epochs: int = 10):
+        """
+        Entraîne le modèle sur les données d'entraînement.
+        
+        Args:
+            epochs: Nombre d'époques (passes complètes sur les données)
+        """
         batch_size = 1000
         
-        # Parcourir les images par batch
-        for batch_start in range(0, len(self.training_images), batch_size):
-            batch_end = min(batch_start + batch_size, len(self.training_images))
-            batch_costs = []
+        print(f"Démarrage de l'entraînement sur {epochs} époques...\n")
+        
+        # Boucle sur les époques
+        for epoch in range(epochs):
+            print(f"=== ÉPOQUE {epoch + 1}/{epochs} ===")
             
-            # Initialiser les accumulateurs de gradients
-            batch_grad_weights = [np.zeros_like(w) for w in self.weights_mats]
-            batch_grad_bias = [np.zeros_like(b) for b in self.bias_mats]
-            
-            # Pour chaque image du batch
-            for i in range(batch_start, batch_end):
-                # Préparer l'image (convertir en numpy array de forme (1, 784))
-                self.layers[0] = np.array(self.training_images[i]).reshape(1, 784)
+            # Parcourir les images par batch
+            for batch_start in range(0, len(self.training_images), batch_size):
+                batch_end = min(batch_start + batch_size, len(self.training_images))
+                batch_costs = []
                 
-                # Convertir le label en one-hot
-                target_label = self.label_to_one_hot(self.training_labels[i])
+                # Initialiser les accumulateurs de gradients
+                batch_grad_weights = [np.zeros_like(w) for w in self.weights_mats]
+                batch_grad_bias = [np.zeros_like(b) for b in self.bias_mats]
                 
-                # Forward propagation
-                self.forward_prop()
+                # Pour chaque image du batch
+                for i in range(batch_start, batch_end):
+                    # Préparer l'image (convertir en numpy array de forme (1, 784))
+                    self.layers[0] = np.array(self.training_images[i]).reshape(1, 784)
+                    
+                    # Convertir le label en one-hot
+                    target_label = self.label_to_one_hot(self.training_labels[i])
+                    
+                    # Forward propagation
+                    self.forward_prop()
+                    
+                    # Calculer le coût (pour monitoring)
+                    cost_value = self.cost(self.layers[3], target_label)
+                    batch_costs.append(cost_value)
+                    
+                    # Backward propagation (récupérer les gradients)
+                    grad_weights, grad_bias = self.back_prop(target_label)
+                    
+                    # Accumuler les gradients
+                    for j in range(len(batch_grad_weights)):
+                        batch_grad_weights[j] += grad_weights[j]
+                        batch_grad_bias[j] += grad_bias[j]
                 
-                # Calculer le coût (pour monitoring)
-                cost_value = self.cost(self.layers[3], target_label)
-                batch_costs.append(cost_value)
-                
-                # Backward propagation (récupérer les gradients)
-                grad_weights, grad_bias = self.back_prop(target_label)
-                
-                # Accumuler les gradients
+                # Moyenner les gradients sur le batch
+                actual_batch_size = batch_end - batch_start
                 for j in range(len(batch_grad_weights)):
-                    batch_grad_weights[j] += grad_weights[j]
-                    batch_grad_bias[j] += grad_bias[j]
+                    batch_grad_weights[j] /= actual_batch_size
+                    batch_grad_bias[j] /= actual_batch_size
+                
+                # Mettre à jour les poids et biais
+                self.update_weights(batch_grad_weights)
+                self.update_bias(batch_grad_bias)
+                
+                # Afficher le coût moyen du batch
+                avg_cost = self.calculate_average_cost(batch_costs, len(batch_costs))
+                print(f"  Batch {batch_start//batch_size + 1}, Coût moyen: {avg_cost:.4f}")
             
-            # Moyenner les gradients sur le batch
-            actual_batch_size = batch_end - batch_start
-            for j in range(len(batch_grad_weights)):
-                batch_grad_weights[j] /= actual_batch_size
-                batch_grad_bias[j] /= actual_batch_size
-            
-            # Mettre à jour les poids et biais
-            self.update_weights(batch_grad_weights)
-            self.update_bias(batch_grad_bias)
-            
-            # Afficher le coût moyen du batch
-            avg_cost = self.calculate_average_cost(batch_costs, len(batch_costs))
-            print(f"Batch {batch_start//batch_size + 1}, Coût moyen: {avg_cost}")
+            print()  # Ligne vide entre les époques
 
     def testing(self):
         """
@@ -202,8 +216,8 @@ class NeuralNetwork:
 
     # Convertit le label: training target, vers un vect pour calculer la fonction Cost du model
     def label_to_one_hot(self, label: int) -> np.array:
-        one_hot = np.zeros(10) # renvoie un vecteur de dim(1, 10)
-        one_hot[label] = 1.0
+        one_hot = np.zeros((1, 10)) # renvoie un vecteur de dim(1, 10)
+        one_hot[0, label] = 1.0
         return one_hot
     
     # Fonction sigmoid qui compresse la droite des réelles entre 0 et 1
