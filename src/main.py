@@ -11,3 +11,8 @@ if __name__ == "__main__":
     end_time = time.time()
     print("Entrainement terminé !")
     print(f"Entrainement fini en: {end_time - start_time:.2f} sec")
+
+    start_time = time.time()
+    nn.testing()
+    end_time = time.time()
+    print(f"temps de test: {end_time - start_time:.2f}")

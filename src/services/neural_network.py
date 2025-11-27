@@ -161,6 +161,45 @@ class NeuralNetwork:
             avg_cost = self.calculate_average_cost(batch_costs, len(batch_costs))
             print(f"Batch {batch_start//batch_size + 1}, Coût moyen: {avg_cost:.4f}")
 
+    def testing(self):
+        """
+        Teste le modèle sur les données de test et calcule la précision.
+        """
+        temp = extract_testing(None)
+        test_images = format_images(temp[0])
+        test_labels = temp[1]
+        
+        correct_predictions = 0
+        total_images = len(test_images)
+        
+        print(f"\nDémarrage du test sur {total_images} images...")
+        
+        # Tester chaque image
+        for i in range(total_images):
+            # Préparer l'image (convertir en numpy array de forme (1, 784))
+            self.layers[0] = np.array(test_images[i]).reshape(1, 784)
+            
+            # Forward propagation
+            self.forward_prop()
+            
+            # Obtenir la prédiction (l'indice du neurone avec la valeur la plus élevée)
+            prediction = np.argmax(self.layers[3])
+            
+            # Comparer avec le label réel
+            true_label = test_labels[i]
+            
+            if prediction == true_label:
+                correct_predictions += 1
+        
+        # Calculer la précision
+        accuracy = (correct_predictions / total_images) * 100
+        
+        print(f"\nRésultats du test :")
+        print(f"Prédictions correctes : {correct_predictions}/{total_images}")
+        print(f"Précision : {accuracy:.2f}%")
+        
+        return accuracy
+
     # Convertit le label: training target, vers un vect pour calculer la fonction Cost du model
     def label_to_one_hot(self, label: int) -> np.array:
         one_hot = np.zeros(10) # renvoie un vecteur de dim(1, 10)
