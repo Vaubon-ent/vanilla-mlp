@@ -171,7 +171,7 @@ class NeuralNetwork:
                 
                 # Afficher le coût moyen du batch
                 avg_cost = self.calculate_average_cost(batch_costs, len(batch_costs))
-                print(f"  Batch {batch_start//batch_size + 1}, Coût moyen: {avg_cost:.4f}")
+                print(f"  Batch {batch_start//batch_size + 1}, Coût moyen: {avg_cost}")
             
             print()  # Ligne vide entre les époques
 
