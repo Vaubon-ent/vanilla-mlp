@@ -1,3 +1,4 @@
 kagglehub
 python-mnist
 numpy
+cupy-rocm-5-7
