@@ -1,6 +1,7 @@
 from mnist import MNIST
 import kagglehub, os, random
 from pathlib import Path
+from typing import List
 
 
 def get_data_dir():
@@ -44,7 +45,7 @@ def extract_testing(path: str = None):
     images, labels = mndata.load_testing()
     return (images, labels, mndata)
 
-def format_images(images: []) -> []:
+def format_images(images: List) -> List:
     """
     Normalise les images MNIST en divisant chaque pixel par 255.0
     pour obtenir des valeurs entre 0 et 1.
@@ -55,7 +56,7 @@ def format_images(images: []) -> []:
     Returns:
         Liste de listes avec les pixels normalisés entre 0 et 1
     """
-    formated_images = [float]
+    formated_images = []
     
     # Chaque élément de 'images' est une image complète (784 pixels)
     for image in images:
