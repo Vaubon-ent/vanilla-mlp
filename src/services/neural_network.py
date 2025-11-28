@@ -26,9 +26,9 @@ class NeuralNetwork:
     MAX_GRAD_NORM = 1.0                    
 
     learning_rate: float = 0.1
-    initial_learning_rate: float = 0.01  # Learning rate initial
+    initial_learning_rate: float = 0.001  # Learning rate initial
     min_learning_rate: float = 0.0001  # Learning rate minimum
-    learning_rate_decay: float = 0.95  # Facteur de décroissance par époque
+    learning_rate_decay: float = 0.98  # Facteur de décroissance par époque (ralenti)
     patience: int = 5  # Nombre d'époques sans amélioration avant de réduire le LR
 
     def __init__(self):
@@ -106,6 +106,34 @@ class NeuralNetwork:
         grad_bias = [grad_bias_0, grad_bias_1, grad_bias_2]
 
         return grad_weights, grad_bias
+    
+    def clip_gradients(self, grad_weights: List, grad_bias: List) -> tuple:
+        """
+        Applique le gradient clipping pour éviter l'explosion des gradients.
+        
+        Args:
+            grad_weights: Liste des gradients des poids
+            grad_bias: Liste des gradients des biais
+            
+        Returns:
+            Tuple (grad_weights_clipped, grad_bias_clipped)
+        """
+        # Calculer la norme totale des gradients
+        total_norm = 0.0
+        for grad_w in grad_weights:
+            total_norm += torch.sum(grad_w ** 2).item()
+        for grad_b in grad_bias:
+            total_norm += torch.sum(grad_b ** 2).item()
+        total_norm = math.sqrt(total_norm)
+        
+        # Si la norme dépasse le seuil, normaliser
+        if total_norm > self.MAX_GRAD_NORM:
+            clip_coef = self.MAX_GRAD_NORM / (total_norm + 1e-6)
+            grad_weights_clipped = [grad_w * clip_coef for grad_w in grad_weights]
+            grad_bias_clipped = [grad_b * clip_coef for grad_b in grad_bias]
+            return grad_weights_clipped, grad_bias_clipped
+        else:
+            return grad_weights, grad_bias
         
     def update_weights(self, grad_weight: List):
         for i in range(len(self.weights_mats)):
@@ -252,13 +280,24 @@ class NeuralNetwork:
                     grad_weights_0, grad_bias_0, costs_0 = results[0]
                     grad_weights_1, grad_bias_1, costs_1 = results[1]
                     
-                    # Moyenner les gradients des 2 GPU (ramener sur device principal)
+                    # Calculer les tailles des sous-batches pour pondération correcte
+                    size_gpu0 = len(indices_gpu0)
+                    size_gpu1 = len(indices_gpu1)
+                    total_size = size_gpu0 + size_gpu1
+                    
+                    # Moyenner les gradients des 2 GPU avec pondération par taille (ramener sur device principal)
                     batch_grad_weights = []
                     batch_grad_bias = []
                     for j in range(len(grad_weights_0)):
-                        # Ramener sur le device principal et moyenner
-                        grad_w = (grad_weights_0[j].to(device) + grad_weights_1[j].to(device)) / 2
-                        grad_b = (grad_bias_0[j].to(device) + grad_bias_1[j].to(device)) / 2
+                        # Ramener sur le device principal et moyenner pondéré par taille
+                        grad_w_0 = grad_weights_0[j].to(device)
+                        grad_w_1 = grad_weights_1[j].to(device)
+                        grad_w = (grad_w_0 * size_gpu0 + grad_w_1 * size_gpu1) / total_size
+                        
+                        grad_b_0 = grad_bias_0[j].to(device)
+                        grad_b_1 = grad_bias_1[j].to(device)
+                        grad_b = (grad_b_0 * size_gpu0 + grad_b_1 * size_gpu1) / total_size
+                        
                         batch_grad_weights.append(grad_w)
                         batch_grad_bias.append(grad_b)
                     
@@ -297,6 +336,9 @@ class NeuralNetwork:
                     for j in range(len(batch_grad_weights)):
                         batch_grad_weights[j] /= actual_batch_size
                         batch_grad_bias[j] /= actual_batch_size
+                
+                # Appliquer le gradient clipping avant la mise à jour
+                batch_grad_weights, batch_grad_bias = self.clip_gradients(batch_grad_weights, batch_grad_bias)
                 
                 # Mettre à jour les poids et biais
                 self.update_weights(batch_grad_weights)
