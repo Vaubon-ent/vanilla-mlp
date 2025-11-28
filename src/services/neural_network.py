@@ -32,7 +32,7 @@ class NeuralNetwork:
     patience: int = 5  # Nombre d'époques sans amélioration avant de réduire le LR
 
     def __init__(self):
-        # Init neural layer
+    # Init neural layer
         self.layers = []
         self.z_values = []
         self.weights_mats = []
@@ -146,7 +146,8 @@ class NeuralNetwork:
     def _compute_gradients_on_gpu(self, gpu_id: int, image_indices: List[int]) -> tuple:
         """
         Calcule les gradients pour un sous-ensemble d'images sur un GPU spécifique.
-        Réutilise les fonctions forward_prop et back_prop existantes.
+        Utilise des copies locales des attributs pour éviter les conflits entre threads.
+        Utilise forward_prop et back_prop normalement.
         
         Args:
             gpu_id: ID du GPU à utiliser (0 ou 1)
@@ -157,33 +158,45 @@ class NeuralNetwork:
         """
         gpu_device = torch.device(f"cuda:{gpu_id}")
         
-        # Sauvegarder les poids et biais originaux
-        original_weights = self.weights_mats.copy()
-        original_bias = self.bias_mats.copy()
+        # Créer des copies locales des poids et biais sur le GPU spécifique
+        weights_local = [w.to(gpu_device) for w in self.weights_mats]
+        bias_local = [b.to(gpu_device) for b in self.bias_mats]
         
-        # Copier les poids et biais sur le GPU spécifique et les assigner temporairement
-        self.weights_mats = [w.to(gpu_device) for w in original_weights]
-        self.bias_mats = [b.to(gpu_device) for b in original_bias]
+        # Créer des copies locales des layers et z_values
+        layers_local = [layer.to(gpu_device) if layer.device != gpu_device else layer.clone() for layer in self.layers]
+        z_values_local = []
+        
+        # Sauvegarder les attributs originaux
+        original_weights = self.weights_mats
+        original_bias = self.bias_mats
+        original_layers = self.layers
+        original_z_values = self.z_values
         
         # Initialiser les accumulateurs de gradients
-        batch_grad_weights = [torch.zeros_like(w) for w in self.weights_mats]
-        batch_grad_bias = [torch.zeros_like(b) for b in self.bias_mats]
+        batch_grad_weights = [torch.zeros_like(w) for w in weights_local]
+        batch_grad_bias = [torch.zeros_like(b) for b in bias_local]
         batch_costs = []
         
         # Traiter chaque image du sous-batch
         for i in image_indices:
+            # Assigner temporairement les copies locales aux attributs de l'instance
+            self.weights_mats = weights_local
+            self.bias_mats = bias_local
+            self.layers = layers_local
+            self.z_values = z_values_local
+            
             # Préparer l'image sur le GPU spécifique
             self.layers[0] = torch.tensor(self.training_images[i], dtype=torch.float32, device=gpu_device).reshape(1, 784)
             target_label = self.label_to_one_hot(self.training_labels[i]).to(gpu_device)
             
-            # Utiliser la fonction forward_prop existante
+            # Utiliser forward_prop normalement (utilise maintenant les copies locales)
             self.forward_prop()
             
             # Calculer le coût en utilisant la fonction cost existante
             cost_value = self.cost(self.layers[3], target_label)
             batch_costs.append(cost_value)
             
-            # Utiliser la fonction back_prop existante
+            # Utiliser back_prop normalement (utilise maintenant les copies locales)
             grad_weights, grad_bias = self.back_prop(target_label)
             
             # Accumuler les gradients
@@ -191,15 +204,17 @@ class NeuralNetwork:
                 batch_grad_weights[j] += grad_weights[j]
                 batch_grad_bias[j] += grad_bias[j]
         
+        # Restaurer les attributs originaux
+        self.weights_mats = original_weights
+        self.bias_mats = original_bias
+        self.layers = original_layers
+        self.z_values = original_z_values
+        
         # Moyenner les gradients
         batch_size = len(image_indices)
         for j in range(len(batch_grad_weights)):
             batch_grad_weights[j] /= batch_size
             batch_grad_bias[j] /= batch_size
-        
-        # Restaurer les poids et biais originaux
-        self.weights_mats = original_weights
-        self.bias_mats = original_bias
         
         return batch_grad_weights, batch_grad_bias, batch_costs
     
@@ -445,7 +460,7 @@ class NeuralNetwork:
         one_hot = torch.zeros((1, 10), device=device) # renvoie un vecteur de dim(1, 10)
         one_hot[0, label] = 1.0
         return one_hot
-    
+
     # Fonction sigmoid qui compresse la droite des réelles entre 0 et 1
     def sigmoid(self, x):
         return 1 / (1 + torch.exp(-x))
