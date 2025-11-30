@@ -1,5 +1,5 @@
 from utils.mnist import extract_training, extract_testing
-from threading import Thread
+from threading import Thread, Lock
 import numpy as np
 import torch, time
 
@@ -28,6 +28,8 @@ class NeuralNetwork():
     #       * la taille du tableau représente le nombre de couche du NN
     #       * chaque représente le nombre de neurones de la couche
     def __init__(self):
+        self.lock = Lock()
+
         self.relu = torch.nn.ReLU() # Var contenant la fonction de ReLU, à utiliser comme une fonction
         self.learning_rate = self.INITIAL_RATE
 
@@ -204,31 +206,33 @@ class NeuralNetwork():
 
 
     def _compute_gradient(self, gradients: list, epoch: int, device_id: int = 0):
-        self._update_lr(epoch)
+        with self.lock:
+            self._update_lr(epoch)
 
-        # Check quel device possède les data poids/biais
-        # Chargement de celle ci sur la device ciblée si nécessaire
-        if len(self.weights) > 0 and self.weights[0].device != device[device_id]:
-            self.weights = [w.to(device[device_id]) for w in self.weights]
-        if len(self.bias) > 0 and self.bias[0].device != device[device_id]:
-            self.bias = [b.to(device[device_id]) for b in self.bias]
+            # Check quel device possède les data poids/biais
+            # Chargement de celle ci sur la device ciblée si nécessaire
+            if len(self.weights) > 0 and self.weights[0].device != device[device_id]:
+                self.weights = [w.to(device[device_id]) for w in self.weights]
+            if len(self.bias) > 0 and self.bias[0].device != device[device_id]:
+                self.bias = [b.to(device[device_id]) for b in self.bias]
 
-        # Split du tableau pour récupérer les gradients de poids et biais séparés
-        if gradients is not None and len(gradients) > 0:
-            gradient_weight = gradients[:3]
-            gradient_bias = gradients[3:]
+            # Split du tableau pour récupérer les gradients de poids et biais séparés
+            if gradients is not None and len(gradients) > 0:
+                gradient_weight = gradients[:3]
+                gradient_bias = gradients[3:]
 
-            # Chargement des gradients sur la device ciblée s'ils sont des Tensor objects
-            gradient_weight = [g.to(device[device_id]) if isinstance(g, torch.Tensor) else g for g in gradient_weight]
-            gradient_bias = [g.to(device[device_id]) if isinstance(g, torch.Tensor) else g for g in gradient_bias]
+                # Chargement des gradients sur la device ciblée s'ils sont des Tensor objects
+                gradient_weight = [g.to(device[device_id]) if isinstance(g, torch.Tensor) else g for g in gradient_weight]
+                gradient_bias = [g.to(device[device_id]) if isinstance(g, torch.Tensor) else g for g in gradient_bias]
 
-            for i in range(3):
-                # MaJ des poids
-                self.weights[i] = self.weights[i] - (self.learning_rate * gradient_weight[i])
-                # MaJ des biais
-                self.bias[i] = self.bias[i] - (self.learning_rate * gradient_bias[i])
-        else:
-            raise IndexError("Le tableau des gradients ne peut être None ou vide.")
+                for i in range(3):
+                    # MaJ des poids
+                    self.weights[i] = self.weights[i] - (self.learning_rate * gradient_weight[i])
+                    # MaJ des biais
+                    self.bias[i] = self.bias[i] - (self.learning_rate * gradient_bias[i])
+            else:
+                raise IndexError("Le tableau des gradients ne peut être None ou vide.")
+    # END FUNCTION
 
     def _update_lr(self, epoch: int):
         self.learning_rate = self.learning_rate * pow(self.DECAY_RATE, epoch)
