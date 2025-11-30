@@ -119,12 +119,12 @@ class NeuralNetwork():
             # S'assurer que c'est 2D : (batch_size, 784)
         if len(layer_0.shape) == 1:
             layer_0 = layer_0.unsqueeze(0)  # (784) -> (1, 784)
-        elif len(layer_0.shape) == 2 and layer_0.shape[1] != 784:
+        else:
+            raise ValueError("Le batch doit être de type torch.Tensor ou np.ndarray.")
+        if len(layer_0.shape) == 2 and layer_0.shape[1] != 784:
             # Si shape est (784, batch_size), transposer
             if layer_0.shape[0] == 784:
                 layer_0 = layer_0.T  # (784, batch_size) -> (batch_size, 784)
-        else:
-            raise ValueError("Le batch doit être de type torch.Tensor ou np.ndarray.")
 
         ## Forward prop for layer_0 -> layer_1
 
