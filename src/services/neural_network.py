@@ -98,7 +98,8 @@ class NeuralNetwork():
     # END FUNCTION
 
     def training(self, epoch: int, batch: list, labels: list, device_id: int = 0):
-        output_model = self.forward_prop(batch, device_id)
+        batch_tensor = [b.to(device[device_id]) for b in batch]
+        output_model = self.forward_prop(batch_tensor, device_id)
         output_target = self.label_to_vect(labels)
 
         gradients = self.back_prop(output_model, output_target, device_id)
