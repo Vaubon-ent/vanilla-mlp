@@ -47,11 +47,23 @@ class NeuralNetwork():
     def run(self, mode: str):
         EPOCHS = 10
         if mode == "TRAINING":
-
-            print("Début de l'entrainement")
+            total_batches = (len(self.training_images) + self.BATCH_SIZE - 1) // self.BATCH_SIZE
+            
+            print("=" * 70)
+            print("ENTRAÎNEMENT")
+            print("=" * 70)
+            print(f"Dataset: {len(self.training_images)} images")
+            print(f"Batch size: {self.BATCH_SIZE} | Batches par epoch: {total_batches}")
+            print(f"Epochs: {EPOCHS} | Learning rate initial: {self.INITIAL_RATE}")
+            print("=" * 70)
+            
             start_time = time.time()
+            epoch_times = []
 
             for e_index in range(EPOCHS):
+                epoch_start = time.time()
+                batch_count = 0
+                
                 for i_index in range(0, len(self.training_images), self.BATCH_SIZE):
                     batch_0 = self.training_images[i_index: i_index+(self.BATCH_SIZE//2)] # Première moitié du batch
                     batch_1 = self.training_images[i_index+(self.BATCH_SIZE//2): i_index+self.BATCH_SIZE] # Deuxième moitié du batch
@@ -67,12 +79,44 @@ class NeuralNetwork():
 
                     thread_gpu_0.join()
                     thread_gpu_1.join()
+                    
+                    batch_count += 1
 
-            print(f"Fin de l'entrainement en {(time.time() - start_time)/60:.1f}")
+                epoch_time = time.time() - epoch_start
+                epoch_times.append(epoch_time)
+                elapsed_time = time.time() - start_time
+                avg_epoch_time = sum(epoch_times) / len(epoch_times)
+                remaining_epochs = EPOCHS - (e_index + 1)
+                estimated_remaining = avg_epoch_time * remaining_epochs
+                
+                # Affichage après chaque epoch (pas de calculs lourds)
+                with self.lock:
+                    current_lr = self.learning_rate
+                
+                print(f"Epoch {e_index+1}/{EPOCHS} | "
+                      f"Temps: {epoch_time:.1f}s | "
+                      f"LR: {current_lr:.6f} | "
+                      f"Total: {elapsed_time/60:.1f}min | "
+                      f"Restant: ~{estimated_remaining/60:.1f}min")
+
+            total_time = time.time() - start_time
+            print("=" * 70)
+            print(f"Entraînement terminé en {total_time/60:.1f} minutes ({total_time:.1f}s)")
+            print(f"Temps moyen par epoch: {sum(epoch_times)/len(epoch_times):.1f}s")
+            print("=" * 70)
         elif mode == "TESTING":
             self.output_test = []
-            print("Début du test")
+            total_test_batches = (len(self.testing_images) + self.BATCH_SIZE - 1) // self.BATCH_SIZE
+            
+            print("=" * 70)
+            print("TEST")
+            print("=" * 70)
+            print(f"Dataset: {len(self.testing_images)} images")
+            print(f"Batch size: {self.BATCH_SIZE} | Batches: {total_test_batches}")
+            print("=" * 70)
+            
             start_time = time.time()
+            batch_count = 0
 
             for i_index in range(0, len(self.testing_images), self.BATCH_SIZE):
                 batch_0 = self.testing_images[i_index: i_index+(self.BATCH_SIZE//2)] # Première moitié du batch
@@ -86,17 +130,36 @@ class NeuralNetwork():
 
                 thread_gpu_0.join()
                 thread_gpu_1.join()
+                
+                batch_count += 1
+                if batch_count % 10 == 0 or batch_count == total_test_batches:
+                    elapsed = time.time() - start_time
+                    progress = (batch_count / total_test_batches) * 100
+                    print(f"Progression: {batch_count}/{total_test_batches} batches ({progress:.1f}%) | "
+                          f"Temps: {elapsed:.1f}s", end='\r')
             
-            print(f"Fin du test en {(time.time() - start_time)/60:.1f}")
-
+            test_time = time.time() - start_time
+            print()  # Nouvelle ligne après la progression
+            
             # Matrice représentant l'ensemble des sortie du test dim(total_size, 10)
             if len(self.output_test) > 0:
+                print("Calcul de la précision...")
                 self.output_test = [o.to(device[0]) for o in self.output_test]
                 output_model_test = torch.cat(self.output_test, dim=0)
                 output_target_test = self.label_to_vect(self.testing_labels)
 
                 precision = self._compute_precision(output_model_test, output_target_test)
-                print(f"Précision de {precision:.2f}")
+                correct = (torch.argmax(output_model_test, dim=1) == torch.argmax(output_target_test, dim=1)).sum().item()
+                total = len(output_model_test)
+                
+                print("=" * 70)
+                print("RÉSULTATS DU TEST")
+                print("=" * 70)
+                print(f"Précision: {precision:.2f}%")
+                print(f"Prédictions correctes: {correct}/{total}")
+                print(f"Temps de test: {test_time:.1f}s ({test_time/60:.2f} min)")
+                print(f"Images par seconde: {len(self.testing_images)/test_time:.1f}")
+                print("=" * 70)
     # END FUNCTION
 
     def training(self, epoch: int, batch: list, labels: list, device_id: int = 0):
