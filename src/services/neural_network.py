@@ -37,9 +37,9 @@ class NeuralNetwork():
         self.init_z_values()
 
         # init des images et labels d'entrainement
-        self.training_images, self.training_labels = extract_training()
+        self.training_images, self.training_labels, _ = extract_training()
 
-        self.testing_images, self.testing_labels = extract_testing()
+        self.testing_images, self.testing_labels, _ = extract_testing()
 
     def run(self, mode: str):
         BATCH_SIZE = 500
