@@ -14,6 +14,7 @@ if torch.cuda.is_available():
     # device = [torch.device("cuda:0"), torch.device("cuda:1")]
 else:
     print("Pas de GPU disponible !")
+    print(device)
 
 class NeuralNetwork():
 
@@ -72,8 +73,18 @@ class NeuralNetwork():
                     labels_0 = self.training_labels[i_index: i_index+(self.BATCH_SIZE//2)]
                     labels_1 = self.training_labels[i_index+(self.BATCH_SIZE//2): i_index+self.BATCH_SIZE]
 
-                    thread_gpu_0 = Thread(target=self.training, args=(e_index, batch_0, labels_0), kwargs={"device_id": 1}) # Utilisation du GPU 0
-                    thread_gpu_1 = Thread(target=self.training, args=(e_index, batch_1, labels_1), kwargs={"device_id": 2}) # Utilisation du GPU 1
+                    # Déterminer les device_id selon les devices disponibles
+                    # Si 2+ GPU disponibles, utiliser GPU 0 et GPU 1 (device[1] et device[2])
+                    # Sinon, utiliser CPU pour les deux (device[0])
+                    if len(device) >= 3:  # Au moins CPU + 2 GPU
+                        device_id_0 = 1  # GPU 0
+                        device_id_1 = 2  # GPU 1
+                    else:
+                        device_id_0 = 0  # CPU
+                        device_id_1 = 0  # CPU
+
+                    thread_gpu_0 = Thread(target=self.training, args=(e_index, batch_0, labels_0), kwargs={"device_id": device_id_0})
+                    thread_gpu_1 = Thread(target=self.training, args=(e_index, batch_1, labels_1), kwargs={"device_id": device_id_1})
 
                     thread_gpu_0.start()
                     thread_gpu_1.start()
@@ -127,8 +138,16 @@ class NeuralNetwork():
                 batch_0 = self.testing_images[i_index: i_index+(self.BATCH_SIZE//2)] # Première moitié du batch
                 batch_1 = self.testing_images[i_index+(self.BATCH_SIZE//2): i_index+self.BATCH_SIZE] # Deuxième moitié du batch
 
-                thread_gpu_0 = Thread(target=self.testing, args=(batch_0, 1)) # Utilisation du GPU 0
-                thread_gpu_1 = Thread(target=self.testing, args=(batch_1, 2)) # Utilisation du GPU 1
+                # Déterminer les device_id selon les devices disponibles
+                if len(device) >= 3:  # Au moins CPU + 2 GPU
+                    device_id_0 = 1  # GPU 0
+                    device_id_1 = 2  # GPU 1
+                else:
+                    device_id_0 = 0  # CPU
+                    device_id_1 = 0  # CPU
+
+                thread_gpu_0 = Thread(target=self.testing, args=(batch_0, device_id_0))
+                thread_gpu_1 = Thread(target=self.testing, args=(batch_1, device_id_1))
 
                 thread_gpu_0.start()
                 thread_gpu_1.start()
@@ -319,11 +338,10 @@ class NeuralNetwork():
     # END FUNCTION
 
     def _average_gradients(self, grad_list: list):
-        averaged_grad = []
-
         if len(grad_list) < 2:
             raise ValueError("grad_list doit contenir au moins 2 éléments (un par thread)")
     
+        averaged_grad = []
         # Extraire les gradients de chaque thread
         grad_thread_0 = grad_list[0]  # Liste de 6 tensors (3 poids, 3 biais)
         grad_thread_1 = grad_list[1]  # Liste de 6 tensors
