@@ -119,18 +119,14 @@ class NeuralNetwork():
                 layer_0 = layer_0.unsqueeze(0)
         else:
             raise ValueError("Le batch doit être de type torch.Tensor ou list.")
-        
-        # Vérification/adjustement de la shape si nécessaire
-        if len(layer_0.shape) == 2 and layer_0.shape[1] != 784:
-            # Si shape est (784, batch_size), transposer
-            if layer_0.shape[0] == 784:
-                layer_0 = layer_0.T  # (784, batch_size) -> (batch_size, 784)
 
         ## Forward prop for layer_0 -> layer_1
 
         # Transformation des weights, bias et z_values en tensor
         weights_gpu =  [w.to(device[gpu_id]) for w in self.weights]
         bias_gpu =  [b.to(device[gpu_id]) for b in self.bias]
+
+        self.layers[0] = layer_0
 
 
         # Calcule de z1 = Somme des activation de layer_0 pondérée par les weights
@@ -252,9 +248,9 @@ class NeuralNetwork():
         # tableau comprenant les différentes couches du NN
         self.layers = []
         # self.layers.append(torch.tensor(np.zeros((1, 784)), device=device[0], dtype=torch.float32)) # Matrice d'entré représentant l'image 28x28: couche 0
-        # self.layers.append(torch.tensor(np.zeros((1, 256)), device=device[0], dtype=torch.float32)) # layers couche 1
-        # self.layers.append(torch.tensor(np.zeros((1, 128)), device=device[0], dtype=torch.float32)) # layers couche 2
-        # self.layers.append(torch.tensor(np.zeros((1, 10)), device=device[0], dtype=torch.float32)) # Matrice de sortie (résultat): couche 3
+        self.layers.append(torch.tensor(np.zeros((1, 256)), device=device[0], dtype=torch.float32)) # layers couche 1
+        self.layers.append(torch.tensor(np.zeros((1, 128)), device=device[0], dtype=torch.float32)) # layers couche 2
+        self.layers.append(torch.tensor(np.zeros((1, 10)), device=device[0], dtype=torch.float32)) # Matrice de sortie (résultat): couche 3
     
     def init_weights(self):
         # tableau des poids et des biais du NN
