@@ -22,6 +22,7 @@ class NeuralNetwork():
     BATCH_SIZE = 500
 
     output_test = []
+    gradients_thread = []
 
     # Params:
     #   - Layering: 
@@ -79,6 +80,10 @@ class NeuralNetwork():
 
                     thread_gpu_0.join()
                     thread_gpu_1.join()
+
+                    averaged_grad = self._average_gradients(self.gradients_thread)
+                    self._compute_gradient(averaged_grad, e_index)
+                    self.gradients_thread = []
                     
                     batch_count += 1
 
@@ -168,7 +173,9 @@ class NeuralNetwork():
         output_target = self.label_to_vect(labels)
 
         gradients = self.back_prop(output_model, output_target, device_id)
-        self._compute_gradient(gradients, epoch, device_id)        
+        with self.lock:
+            self.gradients_thread.append(gradients)
+        # self._compute_gradient(gradients, epoch, device_id)        
 
     def testing(self, batch: list, device_id: int = 0):
         self.output_test.append(self.forward_prop(batch, device_id))     
@@ -310,6 +317,28 @@ class NeuralNetwork():
 
         return (correct/total_test) * 100 # Pourcentage
     # END FUNCTION
+
+    def _average_gradients(self, grad_list: list):
+        averaged_grad = []
+
+        if len(grad_list) < 2:
+            raise ValueError("grad_list doit contenir au moins 2 éléments (un par thread)")
+    
+        # Extraire les gradients de chaque thread
+        grad_thread_0 = grad_list[0]  # Liste de 6 tensors (3 poids, 3 biais)
+        grad_thread_1 = grad_list[1]  # Liste de 6 tensors
+        
+        # Pour chaque gradient (poids ou biais), faire la moyenne
+        for g0, g1 in zip(grad_thread_0, grad_thread_1):
+            # Déplacer les deux gradients sur le CPU
+            g0_cpu = g0.to(device[0]) if isinstance(g0, torch.Tensor) else torch.tensor(g0, device=device[0])
+            g1_cpu = g1.to(device[0]) if isinstance(g1, torch.Tensor) else torch.tensor(g1, device=device[0])
+            
+            # Moyenner les deux gradients
+            averaged = torch.mean(torch.stack([g0_cpu, g1_cpu], dim=0), dim=0)
+            averaged_grad.append(averaged)
+        
+        return averaged_grad
 
     def init_layers(self):
         # tableau comprenant les différentes couches du NN
