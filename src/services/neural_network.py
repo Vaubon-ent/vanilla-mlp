@@ -1,471 +1,406 @@
-from typing import List
-from utils.mnist import *
-import torch, math
-import threading
+from utils.mnist import extract_training, extract_testing
+from threading import Thread, Lock
+import numpy as np
+import torch, time
 
-# Détecter le device (GPU avec ROCm si disponible, sinon CPU)
+device = []
+device.append(torch.device("cpu"))
 if torch.cuda.is_available():
-    num_gpus = torch.cuda.device_count()
-    device = torch.device("cuda:0")
-    print(f"✓ PyTorch - {num_gpus} GPU(s) détecté(s)")
-    for i in range(num_gpus):
-        print(f"  GPU {i}: {torch.cuda.get_device_name(i)} ({torch.cuda.get_device_properties(i).total_memory / 1024**3:.2f} GB)")
-    if num_gpus >= 2:
-        print(f"✓ Parallélisation multi-GPU activée (2 GPU)")
-    else:
-        print(f"ℹ Un seul GPU disponible - Pas de parallélisation")
+    nb_devices_available = torch.cuda.device_count()
+    print(f"Nombre de GPU disponible: {nb_devices_available}")
+    for i in range(nb_devices_available):
+        print(f"\tNom du GPU {i}: {torch.cuda.get_device_name(i)}")
+        device.append(torch.device(f"cuda:{i}"))
+    # device = [torch.device("cuda:0"), torch.device("cuda:1")]
 else:
-    device = torch.device("cpu")
-    num_gpus = 0
-    print("ℹ PyTorch - Utilisation du CPU")
+    print("Pas de GPU disponible !")
+    # print(device)
 
-class NeuralNetwork:
+class NeuralNetwork():
 
-    # Constantes
-    # NB_PARAM = None
-    MAX_GRAD_NORM = 1.0                    
+    INITIAL_RATE = 0.01
+    MIN_RATE = 0.0001
+    DECAY_RATE = 0.95
+    BATCH_SIZE = 500
+    MAX_EPOCHS = 10
 
-    learning_rate: float = 0.1
-    initial_learning_rate: float = 0.001  # Learning rate initial
-    min_learning_rate: float = 0.0001  # Learning rate minimum
-    learning_rate_decay: float = 0.98  # Facteur de décroissance par époque (ralenti)
-    patience: int = 5  # Nombre d'époques sans amélioration avant de réduire le LR
+    output_test = []
+    gradients_thread = []
 
+    # Params:
+    #   - Layering: 
+    #       * la taille du tableau représente le nombre de couche du NN
+    #       * chaque représente le nombre de neurones de la couche
     def __init__(self):
-    # Init neural layer
-        self.layers = []
-        self.z_values = []
-        self.weights_mats = []
-        self.bias_mats = []
+        self.lock = Lock()
 
-        self.layers.append(torch.zeros((1, 784), device=device))
-        self.layers.append(torch.zeros((1, 256), device=device))  # Couche cachée 1 : 256 neurones
-        self.layers.append(torch.zeros((1, 128), device=device))  # Couche cachée 2 : 128 neurones
-        self.layers.append(torch.zeros((1, 10), device=device))
+        self.relu = torch.nn.ReLU() # Var contenant la fonction de ReLU, à utiliser comme une fonction
+        self.learning_rate = self.INITIAL_RATE
 
-        # Init weights and bias matrix avec initialisation de Xavier/Glorot
-        # Variance = 2 / (n_input + n_output) pour la sigmoïde
-        # Architecture : 784 → 256 → 128 → 10
-        self.weights_mats.append(torch.randn(784, 256, device=device) * math.sqrt(2.0 / (784 + 256)))  # De 784 vers 256
-        self.weights_mats.append(torch.randn(256, 128, device=device) * math.sqrt(2.0 / (256 + 128)))    # De 256 vers 128
-        self.weights_mats.append(torch.randn(128, 10, device=device) * math.sqrt(2.0 / (128 + 10)))    # De 128 vers 10
+        # init de toutes les matrices
+        self.init_layers()
+        self.init_weights()
+        self.init_bias()
+        self.init_z_values()
 
-        self.bias_mats.append(torch.zeros((1, 256), device=device))  # Biais pour la première couche cachée (256 neurones)
-        self.bias_mats.append(torch.zeros((1, 128), device=device))  # Biais pour la deuxième couche cachée (128 neurones)
-        self.bias_mats.append(torch.zeros((1, 10), device=device))  # Biais pour la couche de sortie
+        # init des images et labels d'entrainement
+        self.training_images, self.training_labels, _ = extract_training()
 
-        # Init des données d'entrainement
-        temp = extract_training(None)
-        self.training_images = temp[0]
-        self.training_labels = temp[1]
+        self.testing_images, self.testing_labels, _ = extract_testing()
 
-
-    # Calcule la sortie pour une image en entrée donnée
-    def forward_prop(self):
-        self.z_values = []
-        # Layer 0 -> Layer 1
-        z1 = torch.matmul(self.layers[0], self.weights_mats[0]) + self.bias_mats[0]
-        self.z_values.append(z1)
-        self.layers[1] = self.sigmoid(z1)
-
-        # Layer 1 -> Layer 2
-        z2 = torch.matmul(self.layers[1], self.weights_mats[1]) + self.bias_mats[1]
-        self.z_values.append(z2)
-        self.layers[2] = self.sigmoid(z2)
-
-        # Layer 2 -> Layer 3
-        z3 = torch.matmul(self.layers[2], self.weights_mats[2]) + self.bias_mats[2]
-        self.z_values.append(z3)
-        self.layers[3] = self.sigmoid(z3)
-
-
-    def back_prop(self, output_target: torch.Tensor):
-        output_model = self.layers[3]
-        derivated_cost_output = 2 * (output_model - output_target)
-
-        # calcule de l'erreur de la couche 3 sortie du model
-        error_output = derivated_cost_output * self.derivated_sigmoid(self.z_values[2])
-
-        # calcule du gradient pour la derniere couche (2 -> 3)
-        grad_weights_2 = torch.matmul(self.layers[2].T, error_output)
-        grad_bias_2 = error_output
-        # propagation de l'erreur vers la couche 2
-        error_layer_2 = torch.matmul(error_output, self.weights_mats[2].T) * self.derivated_sigmoid(self.z_values[1])
-
-        # calcule du gradient pour la 2e couche (1 -> 2)        
-        grad_weights_1 = torch.matmul(self.layers[1].T, error_layer_2)
-        grad_bias_1 = error_layer_2
-        # propagation de l'erreur vers la couche 1
-        error_layer_1 = torch.matmul(error_layer_2, self.weights_mats[1].T) * self.derivated_sigmoid(self.z_values[0])
-
-        # calcule du gradient pour la 1e couche (0 -> 1)
-        grad_weights_0 = torch.matmul(self.layers[0].T, error_layer_1)
-        grad_bias_0 = error_layer_1
-
-        grad_weights = [grad_weights_0, grad_weights_1, grad_weights_2]
-        grad_bias = [grad_bias_0, grad_bias_1, grad_bias_2]
-
-        return grad_weights, grad_bias
-    
-    def clip_gradients(self, grad_weights: List, grad_bias: List) -> tuple:
-        """
-        Applique le gradient clipping pour éviter l'explosion des gradients.
-        
-        Args:
-            grad_weights: Liste des gradients des poids
-            grad_bias: Liste des gradients des biais
+    def run(self, mode: str):
+        if mode == "TRAINING":
+            total_batches = (len(self.training_images) + self.BATCH_SIZE - 1) // self.BATCH_SIZE
             
-        Returns:
-            Tuple (grad_weights_clipped, grad_bias_clipped)
-        """
-        # Calculer la norme totale des gradients
-        total_norm = 0.0
-        for grad_w in grad_weights:
-            total_norm += torch.sum(grad_w ** 2).item()
-        for grad_b in grad_bias:
-            total_norm += torch.sum(grad_b ** 2).item()
-        total_norm = math.sqrt(total_norm)
-        
-        # Si la norme dépasse le seuil, normaliser
-        if total_norm > self.MAX_GRAD_NORM:
-            clip_coef = self.MAX_GRAD_NORM / (total_norm + 1e-6)
-            grad_weights_clipped = [grad_w * clip_coef for grad_w in grad_weights]
-            grad_bias_clipped = [grad_b * clip_coef for grad_b in grad_bias]
-            return grad_weights_clipped, grad_bias_clipped
+            print("=" * 70)
+            print("ENTRAÎNEMENT")
+            print("=" * 70)
+            print(f"Dataset: {len(self.training_images)} images")
+            print(f"Batch size: {self.BATCH_SIZE} | Batches par epoch: {total_batches}")
+            print(f"Epochs: {self.MAX_EPOCHS} | Learning rate initial: {self.INITIAL_RATE}")
+            print("=" * 70)
+            
+            start_time = time.time()
+            epoch_times = []
+
+            for e_index in range(self.MAX_EPOCHS):
+                epoch_start = time.time()
+                batch_count = 0
+
+                self._update_lr(e_index)
+                
+                for i_index in range(0, len(self.training_images), self.BATCH_SIZE):
+                    batch_0 = self.training_images[i_index: i_index+(self.BATCH_SIZE//2)] # Première moitié du batch
+                    batch_1 = self.training_images[i_index+(self.BATCH_SIZE//2): i_index+self.BATCH_SIZE] # Deuxième moitié du batch
+
+                    labels_0 = self.training_labels[i_index: i_index+(self.BATCH_SIZE//2)]
+                    labels_1 = self.training_labels[i_index+(self.BATCH_SIZE//2): i_index+self.BATCH_SIZE]
+
+                    # Déterminer les device_id selon les devices disponibles
+                    # Si 2+ GPU disponibles, utiliser GPU 0 et GPU 1 (device[1] et device[2])
+                    # Sinon, utiliser CPU pour les deux (device[0])
+                    if len(device) >= 3:  # Au moins CPU + 2 GPU
+                        device_id_0 = 1  # GPU 0
+                        device_id_1 = 2  # GPU 1
+                    else:
+                        device_id_0 = 0  # CPU
+                        device_id_1 = 0  # CPU
+
+                    thread_gpu_0 = Thread(target=self.training, args=(e_index, batch_0, labels_0), kwargs={"device_id": device_id_0})
+                    thread_gpu_1 = Thread(target=self.training, args=(e_index, batch_1, labels_1), kwargs={"device_id": device_id_1})
+
+                    thread_gpu_0.start()
+                    thread_gpu_1.start()
+
+                    thread_gpu_0.join()
+                    thread_gpu_1.join()
+
+                    averaged_grad = self._average_gradients(self.gradients_thread)
+                    self._compute_gradient(averaged_grad)
+                    self.gradients_thread = []
+                    
+                    batch_count += 1
+
+                epoch_time = time.time() - epoch_start
+                epoch_times.append(epoch_time)
+                elapsed_time = time.time() - start_time
+                avg_epoch_time = sum(epoch_times) / len(epoch_times)
+                remaining_epochs = self.MAX_EPOCHS - (e_index + 1)
+                estimated_remaining = avg_epoch_time * remaining_epochs
+                
+                # Affichage après chaque epoch (pas de calculs lourds)
+                with self.lock:
+                    current_lr = self.learning_rate
+                
+                print(f"Epoch {e_index+1}/{self.MAX_EPOCHS} | "
+                      f"Temps: {epoch_time:.1f}s | "
+                      f"LR: {current_lr:.6f} | "
+                      f"Total: {elapsed_time/60:.1f}min | "
+                      f"Restant: ~{estimated_remaining/60:.1f}min")
+
+            total_time = time.time() - start_time
+            print("=" * 70)
+            print(f"Entraînement terminé en {total_time/60:.1f} minutes ({total_time:.1f}s)")
+            print(f"Temps moyen par epoch: {sum(epoch_times)/len(epoch_times):.1f}s")
+            print("=" * 70)
+        elif mode == "TESTING":
+            self.output_test = []
+            total_test_batches = (len(self.testing_images) + self.BATCH_SIZE - 1) // self.BATCH_SIZE
+            
+            print("=" * 70)
+            print("TEST")
+            print("=" * 70)
+            print(f"Dataset: {len(self.testing_images)} images")
+            print(f"Batch size: {self.BATCH_SIZE} | Batches: {total_test_batches}")
+            print("=" * 70)
+            
+            start_time = time.time()
+            batch_count = 0
+
+            for i_index in range(0, len(self.testing_images), self.BATCH_SIZE):
+                batch_0 = self.testing_images[i_index: i_index+(self.BATCH_SIZE//2)] # Première moitié du batch
+                batch_1 = self.testing_images[i_index+(self.BATCH_SIZE//2): i_index+self.BATCH_SIZE] # Deuxième moitié du batch
+
+                # Déterminer les device_id selon les devices disponibles
+                if len(device) >= 3:  # Au moins CPU + 2 GPU
+                    device_id_0 = 1  # GPU 0
+                    device_id_1 = 2  # GPU 1
+                else:
+                    device_id_0 = 0  # CPU
+                    device_id_1 = 0  # CPU
+
+                thread_gpu_0 = Thread(target=self.testing, args=(batch_0, device_id_0))
+                thread_gpu_1 = Thread(target=self.testing, args=(batch_1, device_id_1))
+
+                thread_gpu_0.start()
+                thread_gpu_1.start()
+
+                thread_gpu_0.join()
+                thread_gpu_1.join()
+                
+                batch_count += 1
+                if batch_count % 10 == 0 or batch_count == total_test_batches:
+                    elapsed = time.time() - start_time
+                    progress = (batch_count / total_test_batches) * 100
+                    print(f"Progression: {batch_count}/{total_test_batches} batches ({progress:.1f}%) | "
+                          f"Temps: {elapsed:.1f}s", end='\r')
+            
+            test_time = time.time() - start_time
+            print()  # Nouvelle ligne après la progression
+            
+            # Matrice représentant l'ensemble des sortie du test dim(total_size, 10)
+            if len(self.output_test) > 0:
+                print("Calcul de la précision...")
+                self.output_test = [o.to(device[0]) for o in self.output_test]
+                output_model_test = torch.cat(self.output_test, dim=0)
+                output_target_test = self.label_to_vect(self.testing_labels)
+
+                precision = self._compute_precision(output_model_test, output_target_test)
+                correct = (torch.argmax(output_model_test, dim=1) == torch.argmax(output_target_test, dim=1)).sum().item()
+                total = len(output_model_test)
+                
+                print("=" * 70)
+                print("RÉSULTATS DU TEST")
+                print("=" * 70)
+                print(f"Précision: {precision:.2f}%")
+                print(f"Prédictions correctes: {correct}/{total}")
+                print(f"Temps de test: {test_time:.1f}s ({test_time/60:.2f} min)")
+                print(f"Images par seconde: {len(self.testing_images)/test_time:.1f}")
+                print("=" * 70)
+    # END FUNCTION
+
+    def training(self, epoch: int, batch: list, labels: list, device_id: int = 0):
+        batch_tensor = torch.tensor(batch, dtype=torch.float32)
+        output_model = self.forward_prop(batch_tensor, device_id)
+        output_target = self.label_to_vect(labels)
+
+        gradients = self.back_prop(output_model, output_target, device_id)
+        with self.lock:
+            self.gradients_thread.append(gradients)
+        # self._compute_gradient(gradients, epoch, device_id)        
+
+    def testing(self, batch: list, device_id: int = 0):
+        self.output_test.append(self.forward_prop(batch, device_id))     
+
+    def forward_prop(self, batch: torch.Tensor | list, gpu_id: int = 0):
+        if isinstance(batch, torch.Tensor):
+            layer_0 = batch.to(device[gpu_id])
+            if len(layer_0.shape) == 1:
+                layer_0 = layer_0.unsqueeze(0)
+        elif isinstance(batch, list):
+            layer_0 = torch.tensor(batch, device=device[gpu_id], dtype=torch.float32)
+            if len(layer_0.shape) == 1:
+                layer_0 = layer_0.unsqueeze(0)
         else:
-            return grad_weights, grad_bias
-        
-    def update_weights(self, grad_weight: List):
-        for i in range(len(self.weights_mats)):
-            self.weights_mats[i] = self.weights_mats[i] - (self.learning_rate * grad_weight[i])
+            raise ValueError("Le batch doit être de type torch.Tensor ou list.")
 
-    def update_bias(self, grad_bias: List):
-        for i in range(len(self.bias_mats)):
-            self.bias_mats[i] = self.bias_mats[i] - (self.learning_rate * grad_bias[i])
-    
-    def _compute_gradients_on_gpu(self, gpu_id: int, image_indices: List[int]) -> tuple:
-        """
-        Calcule les gradients pour un sous-ensemble d'images sur un GPU spécifique.
-        Utilise des copies locales des attributs pour éviter les conflits entre threads.
-        Utilise forward_prop et back_prop normalement.
-        
-        Args:
-            gpu_id: ID du GPU à utiliser (0 ou 1)
-            image_indices: Liste des indices d'images à traiter
-            
-        Returns:
-            Tuple (grad_weights, grad_bias, batch_costs)
-        """
-        gpu_device = torch.device(f"cuda:{gpu_id}")
-        
-        # Créer des copies locales des poids et biais sur le GPU spécifique
-        weights_local = [w.to(gpu_device) for w in self.weights_mats]
-        bias_local = [b.to(gpu_device) for b in self.bias_mats]
-        
-        # Créer des copies locales des layers et z_values
-        layers_local = [layer.to(gpu_device) if layer.device != gpu_device else layer.clone() for layer in self.layers]
-        z_values_local = []
-        
-        # Sauvegarder les attributs originaux
-        original_weights = self.weights_mats
-        original_bias = self.bias_mats
-        original_layers = self.layers
-        original_z_values = self.z_values
-        
-        # Initialiser les accumulateurs de gradients
-        batch_grad_weights = [torch.zeros_like(w) for w in weights_local]
-        batch_grad_bias = [torch.zeros_like(b) for b in bias_local]
-        batch_costs = []
-        
-        # Traiter chaque image du sous-batch
-        for i in image_indices:
-            # Assigner temporairement les copies locales aux attributs de l'instance
-            self.weights_mats = weights_local
-            self.bias_mats = bias_local
-            self.layers = layers_local
-            self.z_values = z_values_local
-            
-            # Préparer l'image sur le GPU spécifique
-            self.layers[0] = torch.tensor(self.training_images[i], dtype=torch.float32, device=gpu_device).reshape(1, 784)
-            target_label = self.label_to_one_hot(self.training_labels[i]).to(gpu_device)
-            
-            # Utiliser forward_prop normalement (utilise maintenant les copies locales)
-            self.forward_prop()
-            
-            # Calculer le coût en utilisant la fonction cost existante
-            cost_value = self.cost(self.layers[3], target_label)
-            batch_costs.append(cost_value)
-            
-            # Utiliser back_prop normalement (utilise maintenant les copies locales)
-            grad_weights, grad_bias = self.back_prop(target_label)
-            
-            # Accumuler les gradients
-            for j in range(len(batch_grad_weights)):
-                batch_grad_weights[j] += grad_weights[j]
-                batch_grad_bias[j] += grad_bias[j]
-        
-        # Restaurer les attributs originaux
-        self.weights_mats = original_weights
-        self.bias_mats = original_bias
-        self.layers = original_layers
-        self.z_values = original_z_values
-        
-        # Moyenner les gradients
-        batch_size = len(image_indices)
-        for j in range(len(batch_grad_weights)):
-            batch_grad_weights[j] /= batch_size
-            batch_grad_bias[j] /= batch_size
-        
-        return batch_grad_weights, batch_grad_bias, batch_costs
-    
-    # Calcule le cout pour une sortie d'entrainement
-    def cost(self, output_model, output_target) -> float:
-        # Calculer la somme des carrés des différences
-        # output_model et output_target sont de forme (1, 10)
-        cost = torch.sum(torch.square(output_model - output_target))
-        return float(cost.item())
-    
-    # Retourne le coup moyen d'une liste de coup pour un batch donné
-    # Param:
-    #   - cost ->  list de cost
-    #   - size_costs -> la taille du tableau de coup afin de faire une moyenne
-    def calculate_average_cost(self, costs: List, size_costs: int) -> float:
-        res: float = 0.0
+        ## Forward prop for layer_0 -> layer_1
 
-        for cost in costs:
-            res += cost
-        return res/size_costs
+        # Transformation des weights, bias et z_values en tensor
+        weights_gpu =  [w.to(device[gpu_id]) for w in self.weights]
+        bias_gpu =  [b.to(device[gpu_id]) for b in self.bias]
 
-    def training(self, epochs: int = 10):
-        """
-        Entraîne le modèle sur les données d'entraînement avec learning rate adaptatif.
+        self.layers[0] = layer_0
+
+
+        # Calcule de z1 = Somme des activation de layer_0 pondérée par les weights
+        z1 = torch.addmm(bias_gpu[0], layer_0, weights_gpu[0]) # = W @ layer_0 + B
+        # Sauvegarde de z1
+        self.z_values[0] = z1
+        # Calcule de a1 grace au ReLU
+        a1 = self.relu(z1)
+        # Sauvegarde de a1 dans layer_1
+        self.layers[1] = a1
+
+        ## Forward prop for layer_1 -> layer_2
+
+        # Calcule de z2 = Somme des activation de layer_1 pondérée par les weights
+        z2 = torch.addmm(bias_gpu[1], a1, weights_gpu[1]) # = W @ layer_0 + B
+        # Sauvegarde de z1
+        self.z_values[1] = z2
+        # Calcule de a1 grace au ReLU
+        a2 = self.relu(z2)
+        self.layers[2] = a2
+
+        ## Forward prop for layer_2 -> layer_3
+
+        # Calcule de z2 = Somme des activation de layer_1 pondérée par les weights
+        z3 = torch.addmm(bias_gpu[2], a2, weights_gpu[2]) # = W @ layer_0 + B
+        # Sauvegarde de z1
+        self.z_values[2] = z3
+        # Calcule de a1 grace au ReLU
+        a3 = torch.softmax(z3, dim=1)
+        self.layers[3] = a3 
+
+        return a3
+    # END FUNCTION
+
+    def back_prop(self, batch: torch.Tensor, output_target: torch.Tensor, gpu_id: int = 0):
+        if batch.device !=  device[gpu_id]:
+            output_model = batch.to(device[gpu_id])
+        else:
+            output_model = batch
+        if output_target.device != device[gpu_id]:
+            output_target = output_target.to(device[gpu_id])
+
+        weights_gpu = [w.to(device[gpu_id]) for w in self.weights]
+        layers_gpu = [l.to(device[gpu_id]) for l in self.layers]
+        z_values_gpu = [z.to(device[gpu_id]) for z in self.z_values]
+
+        # === Couche 3 (sortie) ===
+        output_error = output_model - output_target # Dérivée du coup par rapport à la sortie du modèle
+
+
+        error_output_3 = output_error
         
-        Args:
-            epochs: Nombre d'époques (passes complètes sur les données)
-        """
-        batch_size = 1000
-        total_batches = (len(self.training_images) + batch_size - 1) // batch_size
-        
-        # Réinitialiser le learning rate et les variables de suivi
-        self.learning_rate = self.initial_learning_rate
-        best_cost = float('inf')
-        epochs_without_improvement = 0
-        
-        print(f"Démarrage de l'entraînement sur {epochs} époques ({len(self.training_images)} images, {total_batches} batches/époque)")
-        print(f"Learning rate initial: {self.learning_rate:.6f}\n")
-        
-        epoch_costs = []  # Pour stocker le coût moyen de chaque époque
-        best_cost = float('inf')  # Meilleur coût observé
-        epochs_without_improvement = 0  # Compteur d'époques sans amélioration
-        
-        # Boucle sur les époques
-        for epoch in range(epochs):
-            epoch_batch_costs = []
+        gradient_weight_2 = torch.matmul(layers_gpu[2].T, error_output_3) / error_output_3.shape[0] # dz(l)/w(l) @ da(l)/z @ dC/a => règle de la chaine
+        gradient_bias_2 = torch.mean(error_output_3, dim=0, keepdim=True) # dim(1, 10)
+
+        # === Propagation vers couche 2 ===
+        derivated_z2 = self.derivated_relu(z_values_gpu[1])
+        error_layer_2 = torch.matmul(error_output_3, weights_gpu[2].T)
+        error_output_2 = error_layer_2 * derivated_z2
+
+        gradient_weight_1 = torch.matmul(layers_gpu[1].T, error_output_2) / error_output_2.shape[0]
+        gradient_bias_1 = torch.mean(error_output_2, dim=0, keepdim=True) # dim(1, 128)
+
+        # === Propagation vers couche 1
+        derivated_z1 = self.derivated_relu(z_values_gpu[0])
+        error_layer_1 = torch.matmul(error_output_2, weights_gpu[1].T)
+        error_output_1 = error_layer_1 * derivated_z1
+
+        gradient_weight_0 = torch.matmul(layers_gpu[0].T, error_output_1) / error_output_1.shape[0]
+        gradient_bias_0 = torch.mean(error_output_1, dim=0, keepdim=True) # dim(1, 256)
+
+        return [gradient_weight_0, gradient_weight_1, gradient_weight_2, \
+                gradient_bias_0, gradient_bias_1, gradient_bias_2]
+    # END FUNCTION
+
+
+    def _compute_gradient(self, gradients: list, device_id: int = 0):
+        with self.lock:
             
-            # Parcourir les images par batch
-            for batch_start in range(0, len(self.training_images), batch_size):
-                batch_end = min(batch_start + batch_size, len(self.training_images))
-                actual_batch_size = batch_end - batch_start
-                
-                # Parallélisation multi-GPU si 2 GPU ou plus disponibles
-                if num_gpus >= 2:
-                    # Diviser le batch en 2 sous-batches
-                    mid_point = batch_start + actual_batch_size // 2
-                    indices_gpu0 = list(range(batch_start, mid_point))
-                    indices_gpu1 = list(range(mid_point, batch_end))
-                    
-                    # Résultats partagés pour le threading
-                    results = [None, None]
-                    
-                    def compute_on_gpu0():
-                        results[0] = self._compute_gradients_on_gpu(0, indices_gpu0)
-                    
-                    def compute_on_gpu1():
-                        results[1] = self._compute_gradients_on_gpu(1, indices_gpu1)
-                    
-                    # Lancer les calculs en parallèle sur les 2 GPU
-                    thread0 = threading.Thread(target=compute_on_gpu0)
-                    thread1 = threading.Thread(target=compute_on_gpu1)
-                    thread0.start()
-                    thread1.start()
-                    thread0.join()
-                    thread1.join()
-                    
-                    # Récupérer les résultats
-                    grad_weights_0, grad_bias_0, costs_0 = results[0]
-                    grad_weights_1, grad_bias_1, costs_1 = results[1]
-                    
-                    # Calculer les tailles des sous-batches pour pondération correcte
-                    size_gpu0 = len(indices_gpu0)
-                    size_gpu1 = len(indices_gpu1)
-                    total_size = size_gpu0 + size_gpu1
-                    
-                    # Moyenner les gradients des 2 GPU avec pondération par taille (ramener sur device principal)
-                    batch_grad_weights = []
-                    batch_grad_bias = []
-                    for j in range(len(grad_weights_0)):
-                        # Ramener sur le device principal et moyenner pondéré par taille
-                        grad_w_0 = grad_weights_0[j].to(device)
-                        grad_w_1 = grad_weights_1[j].to(device)
-                        grad_w = (grad_w_0 * size_gpu0 + grad_w_1 * size_gpu1) / total_size
-                        
-                        grad_b_0 = grad_bias_0[j].to(device)
-                        grad_b_1 = grad_bias_1[j].to(device)
-                        grad_b = (grad_b_0 * size_gpu0 + grad_b_1 * size_gpu1) / total_size
-                        
-                        batch_grad_weights.append(grad_w)
-                        batch_grad_bias.append(grad_b)
-                    
-                    # Combiner les coûts
-                    batch_costs = costs_0 + costs_1
-                else:
-                    # Mode séquentiel (1 GPU ou CPU)
-                    batch_costs = []
-                    batch_grad_weights = [torch.zeros_like(w) for w in self.weights_mats]
-                    batch_grad_bias = [torch.zeros_like(b) for b in self.bias_mats]
-                    
-                    # Pour chaque image du batch
-                    for i in range(batch_start, batch_end):
-                        # Préparer l'image (convertir en tensor PyTorch de forme (1, 784))
-                        self.layers[0] = torch.tensor(self.training_images[i], dtype=torch.float32, device=device).reshape(1, 784)
-                        
-                        # Convertir le label en one-hot
-                        target_label = self.label_to_one_hot(self.training_labels[i])
-                        
-                        # Forward propagation
-                        self.forward_prop()
-                        
-                        # Calculer le coût (pour monitoring)
-                        cost_value = self.cost(self.layers[3], target_label)
-                        batch_costs.append(cost_value)
-                        
-                        # Backward propagation (récupérer les gradients)
-                        grad_weights, grad_bias = self.back_prop(target_label)
-                        
-                        # Accumuler les gradients
-                        for j in range(len(batch_grad_weights)):
-                            batch_grad_weights[j] += grad_weights[j]
-                            batch_grad_bias[j] += grad_bias[j]
-                    
-                    # Moyenner les gradients sur le batch
-                    for j in range(len(batch_grad_weights)):
-                        batch_grad_weights[j] /= actual_batch_size
-                        batch_grad_bias[j] /= actual_batch_size
-                
-                # Appliquer le gradient clipping avant la mise à jour
-                batch_grad_weights, batch_grad_bias = self.clip_gradients(batch_grad_weights, batch_grad_bias)
-                
-                # Mettre à jour les poids et biais
-                self.update_weights(batch_grad_weights)
-                self.update_bias(batch_grad_bias)
-                
-                # Calculer le coût moyen du batch
-                avg_cost = self.calculate_average_cost(batch_costs, len(batch_costs))
-                epoch_batch_costs.append(avg_cost)
-                
-                # Afficher la progression (réécrit sur la même ligne)
-                batch_num = batch_start // batch_size + 1
-                progress = (batch_num / total_batches) * 100
-                print(f"\rÉpoque {epoch + 1}/{epochs} | Batch {batch_num}/{total_batches} ({progress:.1f}%) | Coût: {avg_cost:.4f}", end='', flush=True)
-            
-            # Calculer le coût moyen de l'époque
-            epoch_avg_cost = self.calculate_average_cost(epoch_batch_costs, len(epoch_batch_costs))
-            epoch_costs.append(epoch_avg_cost)
-            
-            # Learning rate adaptatif : vérifier si amélioration
-            if epoch_avg_cost < best_cost:
-                best_cost = epoch_avg_cost
-                epochs_without_improvement = 0
+            # Check quel device possède les data poids/biais
+            # Chargement de celle ci sur la device ciblée si nécessaire
+            if len(self.weights) > 0 and self.weights[0].device != device[device_id]:
+                self.weights = [w.to(device[device_id]) for w in self.weights]
+            if len(self.bias) > 0 and self.bias[0].device != device[device_id]:
+                self.bias = [b.to(device[device_id]) for b in self.bias]
+
+            # Split du tableau pour récupérer les gradients de poids et biais séparés
+            if gradients is not None and len(gradients) > 0:
+                gradient_weight = gradients[:3]
+                gradient_bias = gradients[3:]
+
+                # Chargement des gradients sur la device ciblée s'ils sont des Tensor objects
+                gradient_weight = [g.to(device[device_id]) if isinstance(g, torch.Tensor) else g for g in gradient_weight]
+                gradient_bias = [g.to(device[device_id]) if isinstance(g, torch.Tensor) else g for g in gradient_bias]
+
+                for i in range(3):
+                    # MaJ des poids
+                    self.weights[i] = self.weights[i] - (self.learning_rate * gradient_weight[i])
+                    # MaJ des biais
+                    self.bias[i] = self.bias[i] - (self.learning_rate * gradient_bias[i])
             else:
-                epochs_without_improvement += 1
-            
-            # Réduire le learning rate si pas d'amélioration depuis 'patience' époques
-            if epochs_without_improvement >= self.patience:
-                old_lr = self.learning_rate
-                self.learning_rate = max(self.learning_rate * self.learning_rate_decay, self.min_learning_rate)
-                if self.learning_rate != old_lr:
-                    print(f"\rÉpoque {epoch + 1}/{epochs} terminée | Coût: {epoch_avg_cost:.4f} | LR réduit: {old_lr:.6f} → {self.learning_rate:.6f} {' ' * 10}")
-                    epochs_without_improvement = 0  # Reset après réduction
-                else:
-                    print(f"\rÉpoque {epoch + 1}/{epochs} terminée | Coût: {epoch_avg_cost:.4f} | LR: {self.learning_rate:.6f} (min) {' ' * 20}")
-            else:
-                # Décroissance exponentielle normale
-                if epoch > 0:  # Ne pas réduire à la première époque
-                    self.learning_rate = max(self.learning_rate * self.learning_rate_decay, self.min_learning_rate)
-                print(f"\rÉpoque {epoch + 1}/{epochs} terminée | Coût: {epoch_avg_cost:.4f} | LR: {self.learning_rate:.6f} {' ' * 30}")
-        
-        # Résumé final de l'entraînement
-        print(f"\n{'='*60}")
-        print(f"ENTRAÎNEMENT TERMINÉ")
-        print(f"{'='*60}")
-        print(f"Nombre d'époques: {epochs}")
-        print(f"Coût initial (époque 1): {epoch_costs[0]:.4f}")
-        print(f"Coût final (époque {epochs}): {epoch_costs[-1]:.4f}")
-        print(f"Amélioration: {((epoch_costs[0] - epoch_costs[-1]) / epoch_costs[0] * 100):.2f}%")
-        print(f"{'='*60}\n")
+                raise IndexError("Le tableau des gradients ne peut être None ou vide.")
+    # END FUNCTION
 
-    def testing(self):
-        """
-        Teste le modèle sur les données de test et calcule la précision.
-        """
-        temp = extract_testing(None)
-        test_images = format_images(temp[0])
-        test_labels = temp[1]
-        
-        correct_predictions = 0
-        total_images = len(test_images)
-        
-        print(f"Test en cours sur {total_images} images...", end='', flush=True)
-        
-        # Tester chaque image
-        for i in range(total_images):
-            # Préparer l'image (convertir en tensor PyTorch de forme (1, 784))
-            self.layers[0] = torch.tensor(test_images[i], dtype=torch.float32, device=device).reshape(1, 784)
-            
-            # Forward propagation
-            self.forward_prop()
-            
-            # Obtenir la prédiction (l'indice du neurone avec la valeur la plus élevée)
-            prediction = torch.argmax(self.layers[3]).item()
-            
-            # Comparer avec le label réel
-            true_label = test_labels[i]
-            
-            if prediction == true_label:
-                correct_predictions += 1
-            
-            # Afficher la progression tous les 1000 images
-            if (i + 1) % 1000 == 0 or i == total_images - 1:
-                progress = ((i + 1) / total_images) * 100
-                print(f"\rTest en cours... {i + 1}/{total_images} ({progress:.1f}%)", end='', flush=True)
-        
-        # Calculer la précision
-        accuracy = (correct_predictions / total_images) * 100
-        
-        # Résumé du test
-        print(f"\r{' ' * 60}")  # Effacer la ligne de progression
-        print(f"{'='*60}")
-        print(f"RÉSULTATS DU TEST")
-        print(f"{'='*60}")
-        print(f"Images testées: {total_images}")
-        print(f"Prédictions correctes: {correct_predictions}")
-        print(f"Prédictions incorrectes: {total_images - correct_predictions}")
-        print(f"PRÉCISION: {accuracy:.2f}%")
-        print(f"{'='*60}\n")
-        
-        return accuracy
+    def _update_lr(self, epoch: int):
+        old_rate = self.learning_rate
+        self.learning_rate = self.INITIAL_RATE * (1 - epoch / self.MAX_EPOCHS)
+        # self.learning_rate = self.INITIAL_RATE * max(0.01, 1 - self.DECAY_RATE * epoch)
+        if self.learning_rate < self.MIN_RATE:
+            self.learning_rate = old_rate
 
-    # Convertit le label: training target, vers un vect pour calculer la fonction Cost du model
-    def label_to_one_hot(self, label: int) -> torch.Tensor:
-        one_hot = torch.zeros((1, 10), device=device) # renvoie un vecteur de dim(1, 10)
-        one_hot[0, label] = 1.0
+    def _compute_precision(self, output_test: torch.Tensor, output_target: torch.Tensor):
+        total_test = len(output_test)
+
+        predictions = torch.argmax(output_test, dim=1)
+        true_labels = torch.argmax(output_target, dim=1)
+
+        correct = (predictions == true_labels).sum().item()
+
+        return (correct/total_test) * 100 # Pourcentage
+    # END FUNCTION
+
+    def _average_gradients(self, grad_list: list):
+        if len(grad_list) < 2:
+            raise ValueError("grad_list doit contenir au moins 2 éléments (un par thread)")
+    
+        averaged_grad = []
+        # Extraire les gradients de chaque thread
+        grad_thread_0 = grad_list[0]  # Liste de 6 tensors (3 poids, 3 biais)
+        grad_thread_1 = grad_list[1]  # Liste de 6 tensors
+        
+        # Pour chaque gradient (poids ou biais), faire la moyenne
+        for g0, g1 in zip(grad_thread_0, grad_thread_1):
+            # Déplacer les deux gradients sur le CPU
+            g0_cpu = g0.to(device[0]) if isinstance(g0, torch.Tensor) else torch.tensor(g0, device=device[0])
+            g1_cpu = g1.to(device[0]) if isinstance(g1, torch.Tensor) else torch.tensor(g1, device=device[0])
+            
+            # Moyenner les deux gradients
+            averaged = torch.mean(torch.stack([g0_cpu, g1_cpu], dim=0), dim=0)
+            averaged_grad.append(averaged)
+        
+        return averaged_grad
+
+    def init_layers(self):
+        # tableau comprenant les différentes couches du NN
+        self.layers = []
+        self.layers.append(torch.tensor(np.zeros((self.BATCH_SIZE, 784)), device=device[0], dtype=torch.float32)) # Matrice d'entré représentant l'image 28x28: couche 0
+        self.layers.append(torch.tensor(np.zeros((self.BATCH_SIZE, 256)), device=device[0], dtype=torch.float32)) # layers couche 1
+        self.layers.append(torch.tensor(np.zeros((self.BATCH_SIZE, 128)), device=device[0], dtype=torch.float32)) # layers couche 2
+        self.layers.append(torch.tensor(np.zeros((self.BATCH_SIZE, 10)), device=device[0], dtype=torch.float32)) # Matrice de sortie (résultat): couche 3
+    
+    def init_weights(self):
+        # tableau des poids et des biais du NN
+        self.weights = []
+        self.weights.append(torch.tensor(np.random.randn(784, 256), device=device[0], dtype=torch.float32)) # Poids entre la couche (0, 1)
+        self.weights.append(torch.tensor(np.random.randn(256, 128), device=device[0], dtype=torch.float32)) # Poids entre la couche (1, 2)
+        self.weights.append(torch.tensor(np.random.randn(128, 10), device=device[0], dtype=torch.float32)) # Poids entre la couche (2, 3)
+
+    def init_bias(self):
+        self.bias = []
+        self.bias.append(torch.tensor(np.random.randn(1, 256), device=device[0], dtype=torch.float32)) # Biais entre la couche (0, 1)
+        self.bias.append(torch.tensor(np.random.randn(1, 128), device=device[0], dtype=torch.float32)) # Biais entre la couche (1, 2)
+        self.bias.append(torch.tensor(np.random.randn(1, 10), device=device[0], dtype=torch.float32)) # Biais entre la couche (2, 3)
+
+    def init_z_values(self):
+        # tableau contenant la somme des activations de la couche précédentes pondérée des poids et biais
+        self.z_values = []
+        self.z_values.append(torch.tensor(np.random.randn(1, 256), device=device[0], dtype=torch.float32)) # Z_values en sortie de la couche 0 => couche 1
+        self.z_values.append(torch.tensor(np.random.randn(1, 128), device=device[0], dtype=torch.float32)) # Z_values en sortie de la couche 1 => couche 2
+        self.z_values.append(torch.tensor(np.random.randn(1, 10), device=device[0], dtype=torch.float32)) # Z_values en sortie de la couche 2 => couche 3
+
+    def label_to_vect(self, labels: list) ->  torch.Tensor:
+        batch_label = len(labels)
+
+        one_hot = torch.zeros((batch_label, 10), dtype=torch.float32)
+
+        for i, label in enumerate(labels):
+            one_hot[i][label] = 1.0
+
         return one_hot
-
-    # Fonction sigmoid qui compresse la droite des réelles entre 0 et 1
-    def sigmoid(self, x):
-        return 1 / (1 + torch.exp(-x))
     
-    # retourne la dérivié de la sigmoid
-    def derivated_sigmoid(self, z) -> torch.Tensor:
-        s = self.sigmoid(z)
-        return s * (1 - s)
+    def derivated_relu(self, x: torch.Tensor) -> torch.Tensor:
+        return (x > 0).float() # Convertit True/False en 1.0/0.00
