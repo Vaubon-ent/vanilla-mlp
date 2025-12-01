@@ -14,13 +14,15 @@ if torch.cuda.is_available():
     # device = [torch.device("cuda:0"), torch.device("cuda:1")]
 else:
     print("Pas de GPU disponible !")
-    print(device)
+    # print(device)
 
 class NeuralNetwork():
 
     INITIAL_RATE = 0.01
+    MIN_RATE = 0.0001
     DECAY_RATE = 0.95
     BATCH_SIZE = 500
+    MAX_EPOCHS = 10
 
     output_test = []
     gradients_thread = []
@@ -47,7 +49,6 @@ class NeuralNetwork():
         self.testing_images, self.testing_labels, _ = extract_testing()
 
     def run(self, mode: str):
-        EPOCHS = 10
         if mode == "TRAINING":
             total_batches = (len(self.training_images) + self.BATCH_SIZE - 1) // self.BATCH_SIZE
             
@@ -56,15 +57,17 @@ class NeuralNetwork():
             print("=" * 70)
             print(f"Dataset: {len(self.training_images)} images")
             print(f"Batch size: {self.BATCH_SIZE} | Batches par epoch: {total_batches}")
-            print(f"Epochs: {EPOCHS} | Learning rate initial: {self.INITIAL_RATE}")
+            print(f"Epochs: {self.MAX_EPOCHS} | Learning rate initial: {self.INITIAL_RATE}")
             print("=" * 70)
             
             start_time = time.time()
             epoch_times = []
 
-            for e_index in range(EPOCHS):
+            for e_index in range(self.MAX_EPOCHS):
                 epoch_start = time.time()
                 batch_count = 0
+
+                self._update_lr(e_index)
                 
                 for i_index in range(0, len(self.training_images), self.BATCH_SIZE):
                     batch_0 = self.training_images[i_index: i_index+(self.BATCH_SIZE//2)] # Première moitié du batch
@@ -93,7 +96,7 @@ class NeuralNetwork():
                     thread_gpu_1.join()
 
                     averaged_grad = self._average_gradients(self.gradients_thread)
-                    self._compute_gradient(averaged_grad, e_index)
+                    self._compute_gradient(averaged_grad)
                     self.gradients_thread = []
                     
                     batch_count += 1
@@ -102,14 +105,14 @@ class NeuralNetwork():
                 epoch_times.append(epoch_time)
                 elapsed_time = time.time() - start_time
                 avg_epoch_time = sum(epoch_times) / len(epoch_times)
-                remaining_epochs = EPOCHS - (e_index + 1)
+                remaining_epochs = self.MAX_EPOCHS - (e_index + 1)
                 estimated_remaining = avg_epoch_time * remaining_epochs
                 
                 # Affichage après chaque epoch (pas de calculs lourds)
                 with self.lock:
                     current_lr = self.learning_rate
                 
-                print(f"Epoch {e_index+1}/{EPOCHS} | "
+                print(f"Epoch {e_index+1}/{self.MAX_EPOCHS} | "
                       f"Temps: {epoch_time:.1f}s | "
                       f"LR: {current_lr:.6f} | "
                       f"Total: {elapsed_time/60:.1f}min | "
@@ -270,7 +273,7 @@ class NeuralNetwork():
 
         error_output_3 = output_error
         
-        gradient_weight_2 = torch.matmul(layers_gpu[2].T, error_output_3) # dz(l)/w(l) @ da(l)/z @ dC/a => règle de la chaine
+        gradient_weight_2 = torch.matmul(layers_gpu[2].T, error_output_3) / error_output_3.shape[0] # dz(l)/w(l) @ da(l)/z @ dC/a => règle de la chaine
         gradient_bias_2 = torch.mean(error_output_3, dim=0, keepdim=True) # dim(1, 10)
 
         # === Propagation vers couche 2 ===
@@ -278,7 +281,7 @@ class NeuralNetwork():
         error_layer_2 = torch.matmul(error_output_3, weights_gpu[2].T)
         error_output_2 = error_layer_2 * derivated_z2
 
-        gradient_weight_1 = torch.matmul(layers_gpu[1].T, error_output_2)
+        gradient_weight_1 = torch.matmul(layers_gpu[1].T, error_output_2) / error_output_2.shape[0]
         gradient_bias_1 = torch.mean(error_output_2, dim=0, keepdim=True) # dim(1, 128)
 
         # === Propagation vers couche 1
@@ -286,7 +289,7 @@ class NeuralNetwork():
         error_layer_1 = torch.matmul(error_output_2, weights_gpu[1].T)
         error_output_1 = error_layer_1 * derivated_z1
 
-        gradient_weight_0 = torch.matmul(layers_gpu[0].T, error_output_1)
+        gradient_weight_0 = torch.matmul(layers_gpu[0].T, error_output_1) / error_output_1.shape[0]
         gradient_bias_0 = torch.mean(error_output_1, dim=0, keepdim=True) # dim(1, 256)
 
         return [gradient_weight_0, gradient_weight_1, gradient_weight_2, \
@@ -294,10 +297,9 @@ class NeuralNetwork():
     # END FUNCTION
 
 
-    def _compute_gradient(self, gradients: list, epoch: int, device_id: int = 0):
+    def _compute_gradient(self, gradients: list, device_id: int = 0):
         with self.lock:
-            self._update_lr(epoch)
-
+            
             # Check quel device possède les data poids/biais
             # Chargement de celle ci sur la device ciblée si nécessaire
             if len(self.weights) > 0 and self.weights[0].device != device[device_id]:
@@ -324,7 +326,11 @@ class NeuralNetwork():
     # END FUNCTION
 
     def _update_lr(self, epoch: int):
-        self.learning_rate = self.learning_rate * pow(self.DECAY_RATE, epoch)
+        old_rate = self.learning_rate
+        self.learning_rate = self.INITIAL_RATE * (1 - epoch / self.MAX_EPOCHS)
+        # self.learning_rate = self.INITIAL_RATE * max(0.01, 1 - self.DECAY_RATE * epoch)
+        if self.learning_rate < self.MIN_RATE:
+            self.learning_rate = old_rate
 
     def _compute_precision(self, output_test: torch.Tensor, output_target: torch.Tensor):
         total_test = len(output_test)
