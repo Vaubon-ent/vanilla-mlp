@@ -31,7 +31,6 @@
 Nouvelle archi
 235 param - multi gpu thread
 
-10 epochs -> 11,35% (42s)
-20 epochs -> ()
-30 epochs -> ()
-100 epochs -> ()
+10 epochs -> 84% (42s) - 83.5% - 85,11%
+30 epochs -> 85,7% - 87,6% 
+100 epochs -> 
