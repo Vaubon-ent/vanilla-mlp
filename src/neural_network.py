@@ -3,6 +3,7 @@ from threading import Thread, Lock
 import numpy as np
 import torch, time
 import os
+import random
 from datetime import datetime
 
 device = []
@@ -52,7 +53,14 @@ class NeuralNetwork():
 
         self.testing_images, self.testing_labels, _ = extract_testing()
 
-    def run(self, mode: str):
+    def run(self, mode: str, user_image: list = None):
+        """
+        Exécute le réseau de neurones selon le mode spécifié.
+        
+        Args:
+            mode: "TRAINING", "TESTING", ou "USER"
+            user_image: Liste de 784 pixels normalisés (0-1) pour le mode USER
+        """
         if mode == "TRAINING":
             total_batches = (len(self.training_images) + self.BATCH_SIZE - 1) // self.BATCH_SIZE
             
@@ -217,6 +225,144 @@ class NeuralNetwork():
                                     print(f"Modèle mis à jour avec la précision: {latest_model}")
                             except Exception as e:
                                 print(f"Attention: Impossible de mettre à jour le modèle avec la précision: {e}")
+        elif mode == "USER":
+            if user_image is None:
+                raise ValueError("Le mode USER nécessite une image utilisateur (user_image).")
+            
+            if len(user_image) != 784:
+                raise ValueError(f"L'image doit contenir 784 pixels (28x28), reçu: {len(user_image)} pixels.")
+            
+            print("=" * 70)
+            print("PRÉDICTION UTILISATEUR")
+            print("=" * 70)
+            print("Traitement de l'image...")
+            
+            # Déterminer le device à utiliser
+            if len(device) >= 3:  # Au moins CPU + 2 GPU
+                device_id = 1  # GPU 0
+            else:
+                device_id = 0  # CPU
+            
+            # Debug : vérifier l'image reçue
+            import numpy as np
+            img_array = np.array(user_image)
+            print(f"DEBUG Image reçue par MLP:")
+            print(f"  Type: {type(user_image)}, Longueur: {len(user_image)}")
+            print(f"  Min: {img_array.min():.4f}, Max: {img_array.max():.4f}, Mean: {img_array.mean():.4f}")
+            print(f"  Pixels < 0.1 (noir): {(img_array < 0.1).sum()}, Pixels > 0.9 (blanc): {(img_array > 0.9).sum()}")
+            
+            # Faire la prédiction
+            start_time = time.time()
+            output = self.forward_prop(user_image, device_id)
+            prediction_time = time.time() - start_time
+            
+            # Debug : vérifier la sortie du forward_prop
+            print(f"DEBUG Forward prop output:")
+            print(f"  Shape: {output.shape}")
+            print(f"  Device: {output.device}")
+            print(f"  Valeurs: {output[0].cpu().detach().numpy()}")
+            
+            # Obtenir le label prédit
+            predicted_label = self.vect_to_label(output[0])  # output est (1, 10), on prend la première ligne
+            
+            # Obtenir les probabilités pour chaque chiffre
+            probabilities = output[0].cpu().detach().numpy()
+            
+            # Debug : vérifier que les probabilités sont valides
+            print(f"DEBUG Probabilités:")
+            print(f"  Sum: {probabilities.sum():.6f} (devrait être ~1.0)")
+            print(f"  Argmax: {np.argmax(probabilities)}")
+            
+            print("=" * 70)
+            print("RÉSULTAT DE LA PRÉDICTION")
+            print("=" * 70)
+            print(f"Chiffre prédit: {predicted_label}")
+            print(f"Temps de prédiction: {prediction_time*1000:.2f}ms")
+            print("\nProbabilités pour chaque chiffre:")
+            for i, prob in enumerate(probabilities):
+                bar = "█" * int(prob * 50)  # Barre visuelle (max 50 caractères)
+                print(f"  {i}: {prob*100:5.2f}% {bar}")
+            print("=" * 70)
+            
+            return predicted_label, probabilities
+        elif mode == "TEST_MNIST":
+            print("=" * 70)
+            print("TEST AUTOMATIQUE AVEC IMAGE MNIST")
+            print("=" * 70)
+            
+            # Charger le dataset de test
+            print("Chargement du dataset de test MNIST...")
+            test_images_raw, test_labels, mndata = extract_testing()
+            
+            # Choisir une image aléatoire
+            random_index = random.randint(0, len(test_images_raw) - 1)
+            selected_image_raw = test_images_raw[random_index]
+            true_label = test_labels[random_index]
+            
+            print(f"\nImage sélectionnée: index {random_index}, vrai label: {true_label}")
+            print("\n" + "=" * 70)
+            print("AFFICHAGE DE L'IMAGE MNIST (ASCII)")
+            print("=" * 70)
+            # mndata.display() retourne une chaîne, il faut l'afficher avec print()
+            print(mndata.display(selected_image_raw))
+            print("=" * 70 + "\n")
+            
+            # Normaliser l'image (comme dans format_images)
+            normalized_image = [pixel / 255.0 for pixel in selected_image_raw]
+            
+            # Debug : vérifier l'image normalisée
+            import numpy as np
+            img_array = np.array(normalized_image)
+            print(f"DEBUG Image MNIST normalisée:")
+            print(f"  Type: {type(normalized_image)}, Longueur: {len(normalized_image)}")
+            print(f"  Min: {img_array.min():.4f}, Max: {img_array.max():.4f}, Mean: {img_array.mean():.4f}")
+            print(f"  Pixels < 0.1 (noir): {(img_array < 0.1).sum()}, Pixels > 0.9 (blanc): {(img_array > 0.9).sum()}")
+            
+            # Déterminer le device à utiliser
+            if len(device) >= 3:  # Au moins CPU + 2 GPU
+                device_id = 1  # GPU 0
+            else:
+                device_id = 0  # CPU
+            
+            # Faire la prédiction
+            print("\nEnvoi de l'image au modèle...")
+            start_time = time.time()
+            output = self.forward_prop(normalized_image, device_id)
+            prediction_time = time.time() - start_time
+            
+            # Debug : vérifier la sortie du forward_prop
+            print(f"DEBUG Forward prop output:")
+            print(f"  Shape: {output.shape}")
+            print(f"  Device: {output.device}")
+            print(f"  Valeurs: {output[0].cpu().detach().numpy()}")
+            
+            # Obtenir le label prédit
+            predicted_label = self.vect_to_label(output[0])
+            
+            # Obtenir les probabilités pour chaque chiffre
+            probabilities = output[0].cpu().detach().numpy()
+            
+            # Debug : vérifier que les probabilités sont valides
+            print(f"DEBUG Probabilités:")
+            print(f"  Sum: {probabilities.sum():.6f} (devrait être ~1.0)")
+            print(f"  Argmax: {np.argmax(probabilities)}")
+            
+            # Afficher les résultats
+            print("\n" + "=" * 70)
+            print("RÉSULTAT DU TEST")
+            print("=" * 70)
+            print(f"Vrai label: {true_label}")
+            print(f"Chiffre prédit: {predicted_label}")
+            print(f"Résultat: {'✓ CORRECT' if predicted_label == true_label else '✗ INCORRECT'}")
+            print(f"Temps de prédiction: {prediction_time*1000:.2f}ms")
+            print("\nProbabilités pour chaque chiffre:")
+            for i, prob in enumerate(probabilities):
+                marker = " <-- PRÉDIT" if i == predicted_label else (" <-- VRAI" if i == true_label else "")
+                bar = "█" * int(prob * 50)
+                print(f"  {i}: {prob*100:5.2f}% {bar}{marker}")
+            print("=" * 70)
+            
+            return predicted_label, true_label, probabilities
     # END FUNCTION
 
     def training(self, epoch: int, batch: list, labels: list, device_id: int = 0):
@@ -243,6 +389,14 @@ class NeuralNetwork():
                 layer_0 = layer_0.unsqueeze(0)
         else:
             raise ValueError("Le batch doit être de type torch.Tensor ou list.")
+
+        # Debug pour le mode USER
+        if layer_0.shape[0] == 1:  # Une seule image
+            import numpy as np
+            print(f"DEBUG forward_prop - Input:")
+            print(f"  Shape: {layer_0.shape}")
+            print(f"  Min: {layer_0.min().item():.4f}, Max: {layer_0.max().item():.4f}, Mean: {layer_0.mean().item():.4f}")
+            print(f"  Premiers 10 pixels: {layer_0[0, :10].cpu().numpy()}")
 
         ## Forward prop for layer_0 -> layer_1
 
@@ -431,6 +585,22 @@ class NeuralNetwork():
             one_hot[i][label] = 1.0
 
         return one_hot
+    
+    def vect_to_label(self, vect: torch.Tensor) -> int:
+        """
+        Transforme la sortie Tensor du MLP (probabilités pour chaque chiffre 0-9) en label.
+        
+        Args:
+            vect: Tensor de shape (10,) contenant les probabilités pour chaque chiffre
+        
+        Returns:
+            int: Le chiffre prédit (0-9) correspondant à l'index avec la probabilité maximale
+        """
+        # Utiliser argmax pour trouver l'index avec la valeur maximale
+        # Si vect est 1D, argmax retourne un tensor scalaire, on le convertit en int
+        if len(vect.shape) == 1:
+            return torch.argmax(vect).item()
+
     
     def derivated_relu(self, x: torch.Tensor) -> torch.Tensor:
         return (x > 0).float() # Convertit True/False en 1.0/0.00
