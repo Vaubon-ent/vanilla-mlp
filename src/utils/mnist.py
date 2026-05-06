@@ -8,11 +8,20 @@ def get_data_dir():
     """
     Trouve automatiquement le dossier 'data' en remontant depuis le fichier actuel.
     Retourne le chemin absolu vers le dossier 'data' à la racine du projet.
+    Fonctionne aussi avec PyInstaller (exe).
     """
-    current_file = Path(__file__).resolve()
-    # Remonter depuis src/utils/mnist.py jusqu'à la racine du projet
-    project_root = current_file.parent.parent.parent
-    data_dir = project_root / "data"
+    import sys
+    
+    if getattr(sys, 'frozen', False):
+        # Si on est dans un exe PyInstaller
+        base_path = Path(sys._MEIPASS)
+    else:
+        # Si on est en mode développement
+        current_file = Path(__file__).resolve()
+        # Remonter depuis src/utils/mnist.py jusqu'à la racine du projet
+        base_path = current_file.parent.parent.parent
+    
+    data_dir = base_path / "data"
     
     if not data_dir.exists():
         raise FileNotFoundError(f"Le dossier 'data' n'a pas été trouvé. Cherché dans: {data_dir}")

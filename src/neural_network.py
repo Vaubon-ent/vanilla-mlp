@@ -1,23 +1,41 @@
 from utils.mnist import extract_training, extract_testing
 from threading import Thread, Lock
 import numpy as np
-import torch, time
-import os
-import random
+import time, torch, os, random
 from datetime import datetime
 
+# Retarder l'import de torch pour éviter les problèmes de DLL au démarrage
+# L'import sera fait dans __init__ ou lors de la première utilisation
 device = []
-device.append(torch.device("cpu"))
-if torch.cuda.is_available():
-    nb_devices_available = torch.cuda.device_count()
-    print(f"Nombre de GPU disponible: {nb_devices_available}")
-    for i in range(nb_devices_available):
-        print(f"\tNom du GPU {i}: {torch.cuda.get_device_name(i)}")
-        device.append(torch.device(f"cuda:{i}"))
-    # device = [torch.device("cuda:0"), torch.device("cuda:1")]
-else:
-    print("Pas de GPU disponible !")
-    # print(device)
+
+def init_torch():
+    """Initialise PyTorch de manière différée."""
+    global device
+    if len(device) > 0:
+        return  # Déjà initialisé
+    
+    try:
+        import torch
+        device.append(torch.device("cpu"))
+        
+        # Essayer de détecter CUDA, mais ne pas échouer si ça ne marche pas
+        try:
+            if torch.cuda.is_available():
+                nb_devices_available = torch.cuda.device_count()
+                print(f"Nombre de GPU disponible: {nb_devices_available}")
+                for i in range(nb_devices_available):
+                    print(f"\tNom du GPU {i}: {torch.cuda.get_device_name(i)}")
+                    device.append(torch.device(f"cuda:{i}"))
+            else:
+                print("Pas de GPU disponible !")
+        except Exception as e:
+            print(f"Attention: Impossible de détecter les GPU: {e}")
+            print("Utilisation du CPU uniquement.")
+        
+        return torch
+    except Exception as e:
+        print(f"ERREUR CRITIQUE: Impossible d'importer PyTorch: {e}")
+        raise
 
 class NeuralNetwork():
 
@@ -36,8 +54,17 @@ class NeuralNetwork():
     #       * chaque représente le nombre de neurones de la couche
     def __init__(self):
         self.lock = Lock()
+        
+        # Initialiser PyTorch de manière différée
+        torch = init_torch()
+        if torch is None:
+            raise RuntimeError("Impossible d'initialiser PyTorch")
+        
+        # Créer un alias global pour torch dans cette classe
+        import torch as torch_module
+        self.torch = torch_module
 
-        self.relu = torch.nn.ReLU() # Var contenant la fonction de ReLU, à utiliser comme une fonction
+        self.relu = self.torch.nn.ReLU() # Var contenant la fonction de ReLU, à utiliser comme une fonction
         self.learning_rate = self.INITIAL_RATE
         self.precision = None  # Précision calculée après test
         self.total_time = None  # Temps total d'entraînement

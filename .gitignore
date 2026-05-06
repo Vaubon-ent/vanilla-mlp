@@ -7,3 +7,9 @@ __pycache__/
 .cursor/rules
 .local.env
 models/
+build/
+dist/
+error.log
+stats.md
+data/
+.vscode/

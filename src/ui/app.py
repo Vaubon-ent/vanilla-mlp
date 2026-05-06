@@ -7,6 +7,17 @@ src_path = Path(__file__).parent.parent
 if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
+# Fonction pour obtenir le chemin de base (fonctionne avec PyInstaller)
+def get_base_path():
+    """Retourne le chemin de base du projet, même dans un exe PyInstaller."""
+    if getattr(sys, 'frozen', False):
+        # Si on est dans un exe PyInstaller
+        base_path = Path(sys._MEIPASS)
+    else:
+        # Si on est en mode développement
+        base_path = Path(__file__).parent.parent.parent
+    return base_path
+
 from PyQt5 import *
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtWidgets import *
@@ -17,25 +28,59 @@ import numpy as np
 class MyApp(QApplication):
 
     def __init__(self):
-        super().__init__(sys.argv)
-        self.nn = NeuralNetwork()
-        self.model_loaded = False  # Flag pour savoir si le modèle est chargé
-        self.current_image = None  # Image MNIST actuellement affichée (normalisée)
-        self.current_label = None  # Label réel de l'image actuelle
+        try:
+            print("Initialisation de PyQt5...")
+            super().__init__(sys.argv)
+            print("PyQt5 initialisé.")
+            
+            print("Création du réseau de neurones...")
+            self.nn = NeuralNetwork()
+            print("Réseau de neurones créé.")
+            
+            self.model_loaded = False  # Flag pour savoir si le modèle est chargé
+            self.current_image = None  # Image MNIST actuellement affichée (normalisée)
+            self.current_label = None  # Label réel de l'image actuelle
 
-        # Charger le modèle au démarrage (une seule fois)
-        self.load_model_if_available()
+            # Charger le modèle au démarrage (une seule fois)
+            print("Chargement du modèle...")
+            self.load_model_if_available()
+            print("Modèle chargé (ou non disponible).")
 
-        self.set_layout()
-        self.init_image_display()
-        self.init_prediction_display()
-        self.init_new_btn()
-        # Ajouter le container du bouton après l'avoir créé
-        self.main_layout.addWidget(self.button_container)
+            print("Création de l'interface...")
+            self.set_layout()
+            self.init_image_display()
+            self.init_prediction_display()
+            self.init_new_btn()
+            # Ajouter le container du bouton après l'avoir créé
+            self.main_layout.addWidget(self.button_container)
+            print("Interface créée avec succès.")
+        except Exception as e:
+            import traceback
+            print("\n" + "=" * 70)
+            print("ERREUR LORS DE L'INITIALISATION")
+            print("=" * 70)
+            print(f"Type d'erreur: {type(e).__name__}")
+            print(f"Message: {str(e)}")
+            print("\nTraceback complet:")
+            traceback.print_exc()
+            print("=" * 70)
+            raise  # Relancer l'erreur pour qu'elle soit capturée dans main.py
     # END FUNCTION
 
     def run(self):
-        self.exec()
+        try:
+            self.exec()
+        except Exception as e:
+            import traceback
+            print("\n" + "=" * 70)
+            print("ERREUR PENDANT L'EXÉCUTION")
+            print("=" * 70)
+            print(f"Type d'erreur: {type(e).__name__}")
+            print(f"Message: {str(e)}")
+            print("\nTraceback complet:")
+            traceback.print_exc()
+            print("=" * 70)
+            raise  # Relancer l'erreur pour qu'elle soit capturée dans main.py
     # END FUNCTION
 
     def set_layout(self):
@@ -181,17 +226,19 @@ class MyApp(QApplication):
         """
         Charge le modèle une seule fois au démarrage si disponible.
         """
-        models_dir = "models"
+        # Utiliser get_base_path() pour fonctionner avec PyInstaller
+        base_path = get_base_path()
+        models_dir = base_path / "models"
         model_files = []
         
-        if os.path.exists(models_dir):
+        if models_dir.exists():
             # Chercher tous les fichiers model_*.pt
-            model_files = glob.glob(os.path.join(models_dir, "model_*.pt"))
+            model_files = list(models_dir.glob("model_*.pt"))
         
         if model_files:
             # Trier par date de modification (le plus récent en dernier)
-            model_files.sort(key=lambda x: os.path.getmtime(x))
-            latest_model = model_files[-1]
+            model_files.sort(key=lambda x: x.stat().st_mtime)
+            latest_model = str(model_files[-1])
             
             print(f"Modèle sauvegardé trouvé: {latest_model}")
             print("Chargement du modèle...")
