@@ -46,7 +46,8 @@ def main():
     print("Création de l'exécutable avec PyInstaller...")
     print("=" * 70)
     
-    cmd = [sys.executable, "-m", "PyInstaller", str(spec_file), "--clean"]
+    # Add --noconfirm to avoid interactive prompt about removing the output dir
+    cmd = [sys.executable, "-m", "PyInstaller", str(spec_file), "--clean", "--noconfirm"]
     
     try:
         subprocess.check_call(cmd)
@@ -54,6 +55,32 @@ def main():
         print("OK - Executable cree avec succes !")
         print("=" * 70)
         print(f"L'executable se trouve dans: {Path(__file__).parent / 'dist' / 'vanilla-mlp' / 'vanilla-mlp.exe'}")
+        # After successful build, attempt to copy MSVC runtime DLLs into the dist folder
+        try:
+            import shutil
+            system_root = os.environ.get('SystemRoot', r'C:\Windows')
+            candidates = [
+                Path(system_root) / 'System32',
+                Path(system_root) / 'SysWOW64'
+            ]
+            target_dir = Path(__file__).parent / 'dist' / 'vanilla-mlp'
+            msvc_files = ['VCRUNTIME140_1.dll', 'VCRUNTIME140.dll', 'MSVCP140.dll']
+            for dll in msvc_files:
+                copied = False
+                for cand in candidates:
+                    src = cand / dll
+                    if src.exists():
+                        try:
+                            shutil.copy2(src, target_dir / dll)
+                            print(f'Copied {dll} from {src} to {target_dir}')
+                            copied = True
+                            break
+                        except Exception as e:
+                            print(f'Failed to copy {dll} from {src}: {e}')
+                if not copied:
+                    print(f'Warning: {dll} not found in System directories; consider installing the Visual C++ Redistributable')
+        except Exception as e:
+            print('Warning while copying MSVC runtimes:', e)
         return 0
     except subprocess.CalledProcessError as e:
         print(f"\nERREUR lors de la creation de l'executable: {e}")
