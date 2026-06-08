@@ -95,3 +95,35 @@ python src/main.py
 ---
 
 *Projet personnel d'exploration — Mai 2026*
+
+---
+
+## Avant de publier (check-list rapide)
+
+1. Vérifier `.gitignore` (les environnements virtuels, modèles et données brutes ne doivent pas être committés).
+2. Supprimer les fichiers volumineux ou sensibles déjà committés :
+
+```bash
+# Retirer les fichiers modèles et l'environnement du suivi git
+git rm --cached -r llm-env/ models/ data/ error.log stats.md
+git commit -m "Remove large/sensitive files from tracking"
+```
+
+3. Si ces fichiers ont déjà une longue histoire dans le repo, purgez l'historique (ex. `git filter-repo` ou BFG) :
+
+```bash
+# Exemple avec git filter-repo (installez-le avant)
+git filter-repo --path models/ --invert-paths
+```
+
+4. Rechercher les secrets/chemins absolus et les anonymiser :
+
+```bash
+# Rechercher les occurrences communes de clés/chemins
+grep -R "API_KEY\|SECRET\|BEGIN PRIVATE KEY\|C:\\Users\\" -n
+```
+
+5. Choisir une licence (`LICENSE` ajouté par défaut — modifiez si besoin).
+6. Relire `README.md`, `BUILD_NOTES.md` et tout fichier de logs pour supprimer les informations personnelles.
+
+Si vous voulez, j'exécute ces commandes pour vous (sauf la purge d'historique complète, qui nécessite une confirmation). 

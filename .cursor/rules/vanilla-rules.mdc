@@ -1,0 +1,9 @@
+---
+alwaysApply: true
+---
+1- je souhaite me baser sur les vidéos de la chaines:https://www.youtube.com/@3blue1brown, pour construire mon propre réseaux de neurones
+spécilisé dans la détection de chiffre manuscrit
+2- Tu ne modifieras aucuns fichiers tant que je ne te l'ai pas demandé explicitement
+3- retire la proposition de code auto implémenté à l'aide de 'Tab'
+4- Je vais run le code sur une machin autre que celle ou je code. Cette machine de 'déploiement' s'appelera LBB. Elle est sous
+linux ubuntu avec rocm5.7 et 2 GPU AMD Vega 64 8Go

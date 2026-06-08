@@ -5,7 +5,7 @@
 PyTorch ne peut pas charger ses DLL dans un exe PyInstaller. L'erreur indique :
 ```
 OSError: [WinError 1114] Une routine d'initialisation d'une bibliothèque de liens dynamiques (DLL) a échoué. 
-Error loading "C:\Users\sam97\AppData\Local\Temp\_MEI31162\torch\lib\c10.dll" or one of its dependencies.
+Error loading "<user_temp_path>/torch/lib/c10.dll" or one of its dependencies.
 ```
 
 ## Solutions possibles
